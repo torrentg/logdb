@@ -12,6 +12,22 @@ void test_version(void) {
     TEST_CHECK(strcmp(version, "0.1.0") == 0);
 }
 
+void test_strerror(void)
+{
+    TEST_ASSERT(ldb_strerror(0) == ldb_strerror(LDB_OK));
+    TEST_ASSERT(strcmp(ldb_strerror(0), "Success") == 0);
+
+    for (int i = 0; i < 19; i++) {
+        TEST_ASSERT(strcmp(ldb_strerror(-i), "Unknow error") != 0);
+    }
+    for (int i = 19; i < 32; i++) {
+        TEST_ASSERT(strcmp(ldb_strerror(-i), "Unknow error") == 0);
+    }
+    for (int i = 1; i < 32; i++) {
+        TEST_ASSERT(strcmp(ldb_strerror(i), "Unknow error") == 0);
+    }
+}
+
 void test_get_millis(void)
 {
     uint64_t t0 = 1713331281361; // 17-apr-2024 05:21:21.361 (UTC)
@@ -83,7 +99,6 @@ void test_close(void)
 
     db.name = (char *) malloc(10);
     db.path = (char *) malloc(10);
-    db.error = (char *) malloc(10);
     db.dat_path = (char *) malloc(10);
     db.idx_path = (char *) malloc(10);
     db.dat_fp = NULL;
@@ -92,7 +107,6 @@ void test_close(void)
     TEST_ASSERT(ldb_close(&db) == LDB_OK);
     TEST_ASSERT(db.name == NULL);
     TEST_ASSERT(db.path == NULL);
-    TEST_ASSERT(db.error == NULL);
     TEST_ASSERT(db.dat_path == NULL);
     TEST_ASSERT(db.idx_path == NULL);
     TEST_ASSERT(db.dat_fp == NULL);
@@ -131,7 +145,6 @@ void test_open_create_db(void)
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     TEST_ASSERT(db.name != NULL && strcmp(db.name, "test") == 0);
     TEST_ASSERT(db.path != NULL && strcmp(db.path, "") == 0);
-    TEST_ASSERT(db.error == NULL || db.error[0] == 0);
     TEST_ASSERT(db.dat_path != NULL && strcmp(db.dat_path, "test.dat") == 0);
     TEST_ASSERT(db.idx_path != NULL && strcmp(db.idx_path, "test.idx") == 0);
     TEST_ASSERT(db.dat_fp != NULL);
@@ -158,7 +171,6 @@ void test_open_empty_db(void)
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     TEST_ASSERT(db.name != NULL && strcmp(db.name, "test") == 0);
     TEST_ASSERT(db.path != NULL && strcmp(db.path, "") == 0);
-    TEST_ASSERT(db.error == NULL || db.error[0] == 0);
     TEST_ASSERT(db.dat_path != NULL && strcmp(db.dat_path, "test.dat") == 0);
     TEST_ASSERT(db.idx_path != NULL && strcmp(db.idx_path, "test.idx") == 0);
     TEST_ASSERT(db.dat_fp != NULL);
@@ -348,6 +360,33 @@ void test_open_1_entry_ok(void)
 
     // open db with 1-entry (idx no rebuilded)
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
+    ldb_close(&db);
+}
+
+void test_open_1_entry_empty(void)
+{
+    const char data[128] = {0};
+    ldb_db_t db = {0};
+    ldb_record_dat_t record = {0};
+
+    remove("test.dat");
+    remove("test.idx");
+
+    // create empty db
+    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
+    // inserting 1 entry (empty)
+    fwrite(&record, sizeof(ldb_record_dat_t), 1, db.dat_fp);
+    // inserting additional empty content
+    fwrite(data, sizeof(data), 1, db.dat_fp);
+    ldb_close(&db);
+
+    // open db with 1-entry (idx will be rebuild)
+    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
+    TEST_ASSERT(db.first_seqnum == 0);
+    TEST_ASSERT(db.first_timestamp == 0);
+    TEST_ASSERT(db.last_seqnum == 0);
+    TEST_ASSERT(db.last_timestamp == 0);
+    TEST_ASSERT(db.dat_end == sizeof(ldb_header_dat_t));
     ldb_close(&db);
 }
 
@@ -579,6 +618,27 @@ void test_alloc_free_entry(void)
     TEST_ASSERT(entry.metadata != ptr);
     TEST_ASSERT(entry.data == entry.metadata + sizeof(void*));
     ldb_free_entry(&entry);
+}
+
+void test_alloc_free_entries(void)
+{
+    ldb_entry_t entries[3] = {{0}};
+
+    // abnormal cases are considered (do nothing)
+    ldb_free_entries(NULL, 3);
+    ldb_free_entries(entries, 0);
+
+    for (int i = 0; i < 3; i++) {
+        entries[i].metadata = malloc(10);
+        entries[i].data = entries[i].metadata + 4;
+    }
+
+    ldb_free_entries(entries, 3);
+
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT(entries[i].metadata == NULL);
+        TEST_ASSERT(entries[i].data == NULL);
+    }
 }
 
 void append_entries(ldb_db_t *db, uint64_t seqnum1, uint64_t seqnum2)
@@ -1071,11 +1131,13 @@ void test_rollback_nominal_case(void)
 
 TEST_LIST = {
     { "version()",                    test_version },
+    { "strerror()",                   test_strerror },
     { "get_millis()",                 test_get_millis },
     { "is_valid_path()",              test_is_valid_path },
     { "is_valid_name()",              test_is_valid_name },
     { "create_filename()",            test_create_filename },
     { "alloc()/free() entry",         test_alloc_free_entry },
+    { "free_entries()",               test_alloc_free_entries },
     { "close()",                      test_close },
     { "open() with invalid args",     test_open_invalid_args },
     { "open() with invalid path",     test_open_invalid_path },
@@ -1086,7 +1148,8 @@ TEST_LIST = {
     { "open() and repair (I)",        test_open_and_repair_1 },
     { "open() and repair (II)",       test_open_and_repair_2 },
     { "open() and repair (III)",      test_open_and_repair_3 },
-    { "open() 1-entry-ok",            test_open_1_entry_ok },
+    { "open() 1-entry ok",            test_open_1_entry_ok },
+    { "open() 1-entry empty",         test_open_1_entry_empty },
     { "open() rollbacked ok",         test_open_rollbacked_ok_uncheck },
     { "open() rollbacked ok (check)", test_open_rollbacked_ok_check },
     { "open() dat check fails",       test_open_dat_check_fails },

@@ -50,20 +50,21 @@ SOFTWARE.
 #define LDB_ERR                   -1
 #define LDB_ERR_ARG               -2
 #define LDB_ERR_MEM               -3
-#define LDB_ERR_NAME              -4
-#define LDB_ERR_PATH              -5
-#define LDB_ERR_FILE              -6
+#define LDB_ERR_PATH              -4
+#define LDB_ERR_NAME              -5
+#define LDB_ERR_OPEN_DAT          -6
 #define LDB_ERR_READ_DAT          -7
 #define LDB_ERR_WRITE_DAT         -8
-#define LDB_ERR_READ_IDX          -9
-#define LDB_ERR_WRITE_IDX        -10
-#define LDB_ERR_FMT_DAT          -11
-#define LDB_ERR_FMT_IDX          -12
-#define LDB_ERR_ENTRY_SEQNUM     -13
-#define LDB_ERR_ENTRY_TIMESTAMP  -14
-#define LDB_ERR_ENTRY_METADATA   -15
-#define LDB_ERR_ENTRY_DATA       -16
-#define LDB_ERR_NOT_FOUND        -17
+#define LDB_ERR_OPEN_IDX          -9
+#define LDB_ERR_READ_IDX         -10
+#define LDB_ERR_WRITE_IDX        -11
+#define LDB_ERR_FMT_DAT          -12
+#define LDB_ERR_FMT_IDX          -13
+#define LDB_ERR_ENTRY_SEQNUM     -14
+#define LDB_ERR_ENTRY_TIMESTAMP  -15
+#define LDB_ERR_ENTRY_METADATA   -16
+#define LDB_ERR_ENTRY_DATA       -17
+#define LDB_ERR_NOT_FOUND        -18
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,7 +83,6 @@ typedef enum {
 typedef struct {
     char *name;
     char *path;
-    char *error;
     char *dat_path;
     FILE *dat_fp;
     char *idx_path;
@@ -121,6 +121,14 @@ typedef struct {
  * @return Library version (semantic version, ex. 1.0.4).
  */
 const char * ldb_version(void);
+
+/**
+ * Returns the textual description of the ldb error code.
+ * 
+ * @param[in] errnum Code error.
+ * @return Textual description.
+ */
+const char * ldb_strerror(int errnum);
 
 /**
  * Deallocates the memory pointed by the entry.
@@ -337,22 +345,31 @@ typedef struct {
     uint64_t pos;
 } ldb_record_idx_t;
 
-static void ldb_set_error(ldb_db_t *obj, const char *fmt, ...)
+const char * ldb_strerror(int errnum)
 {
-    assert(fmt);
-
-    if (!obj || !fmt)
-        return;
-
-    va_list args;
-    char msg[1024] = {0};
-
-    va_start(args, fmt);
-    vsnprintf(msg, sizeof(msg), fmt, args);
-    va_end(args);
-
-    LDB_FREE(obj->error);
-    obj->error = strdup(msg);
+    switch(errnum)
+    {
+        case LDB_OK: return "Success";
+        case LDB_ERR: return "Generic error";
+        case LDB_ERR_ARG: return "Invalid argument";
+        case LDB_ERR_MEM: return "Out of memory";
+        case LDB_ERR_NAME: return "Invalid db name";
+        case LDB_ERR_PATH: return "Invalid directory";
+        case LDB_ERR_OPEN_DAT: return "Cannot open dat file";
+        case LDB_ERR_READ_DAT: return "Error reading dat file";
+        case LDB_ERR_WRITE_DAT: return "Error writing to dat file";
+        case LDB_ERR_OPEN_IDX: return "Cannot open idx file";
+        case LDB_ERR_READ_IDX: return "Error reading idx file";
+        case LDB_ERR_WRITE_IDX: return "Error writing to idx file";
+        case LDB_ERR_FMT_DAT: return "Invalid dat file";
+        case LDB_ERR_FMT_IDX: return "Invalid idx file";
+        case LDB_ERR_ENTRY_SEQNUM: return "Broken sequence";
+        case LDB_ERR_ENTRY_TIMESTAMP: return "Invalid timestamp";
+        case LDB_ERR_ENTRY_METADATA: return "Metadata not found";
+        case LDB_ERR_ENTRY_DATA: return "Data not found";
+        case LDB_ERR_NOT_FOUND: return "No results";
+        default: return "Unknow error";
+    }
 }
 
 static uint64_t ldb_get_millis(void)
@@ -374,10 +391,8 @@ static int ldb_close_file_dat(ldb_db_t *obj)
 
     int ret = LDB_OK;
 
-    if (fclose(obj->dat_fp) != 0) {
-        ldb_set_error(obj, "Error closing dat file: %s", strerror(errno));
+    if (fclose(obj->dat_fp) != 0)
         ret = LDB_ERR_WRITE_DAT;
-    }
 
     obj->dat_fp = NULL;
 
@@ -391,10 +406,8 @@ static int ldb_close_file_idx(ldb_db_t *obj)
 
     int ret = LDB_OK;
 
-    if (fclose(obj->idx_fp) != 0) {
-        ldb_set_error(obj, "Error closing idx file: %s", strerror(errno));
+    if (fclose(obj->idx_fp) != 0)
         ret = LDB_ERR_WRITE_IDX;
-    }
 
     obj->idx_fp = NULL;
 
@@ -411,7 +424,6 @@ static int ldb_free_db(ldb_db_t *obj)
 
     LDB_FREE(obj->name);
     LDB_FREE(obj->path);
-    LDB_FREE(obj->error);
     LDB_FREE(obj->dat_path);
     LDB_FREE(obj->idx_path);
 
@@ -457,8 +469,10 @@ static size_t ldb_allocated_size(size_t size)
     return size + (rem == 0 ? 0 : sizeof(void *) - rem);
 }
 
-// alloc entry memory aligned to generic type
-// returns false on error
+// try to reuse previous allocated memory
+// otherwhise, free existent memory and does only 1 memory allocation
+// both returned pointer are aligned to generic type (void*)
+// returns false on error (allocation error)
 static bool ldb_alloc_entry(ldb_entry_t *entry, uint32_t metadata_len, uint32_t data_len)
 {
     if (entry == NULL)
@@ -782,7 +796,8 @@ static int ldb_read_entry_dat(ldb_db_t *obj, size_t pos, ldb_entry_t *entry)
     if ((rc = ldb_read_record_dat(obj, pos, &record)) != LDB_OK)
         return rc;
 
-    ldb_alloc_entry(entry, record.metadata_len, record.data_len);
+    if (!ldb_alloc_entry(entry, record.metadata_len, record.data_len))
+        return LDB_ERR_MEM;
 
     if (record.metadata_len) {
         assert(entry->metadata != NULL);
@@ -867,6 +882,8 @@ static int ldb_read_record_idx(ldb_db_t *obj, uint64_t seqnum, ldb_record_idx_t 
     return LDB_OK;
 }
 
+#define exit_function(errnum) do { ret = errnum; goto LDB_OPEN_FILE_DAT_END; } while(0)
+
 /**
  * pre-conditions:
  *   - obj->dat_fp == NULL
@@ -901,26 +918,21 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
 
     obj->dat_fp = fopen(obj->dat_path, "r+");
 
-    if (obj->dat_fp == NULL) {
-        ldb_set_error(obj, "Cannot open file '%s': %s", obj->dat_path, strerror(errno));
-        return LDB_ERR_FILE;
-    }
+    if (obj->dat_fp == NULL)
+        return LDB_ERR_OPEN_DAT;
 
     len = ldb_get_file_size(obj->dat_fp);
 
     if (fread(&header, sizeof(ldb_header_dat_t), 1, obj->dat_fp) != 1)
-        goto LDB_OPEN_FILE_DAT_ERR_FMT;
+        exit_function(LDB_ERR_FMT_DAT);
 
     pos += sizeof(ldb_header_dat_t);
 
     if (header.magic_number != LDB_MAGIC_NUMBER) 
-        goto LDB_OPEN_FILE_DAT_ERR_FMT;
+        exit_function(LDB_ERR_FMT_DAT);
 
-    if (header.format != LDB_FORMAT_1) {
-        ldb_set_error(obj, "Unrecognized database format (dat)");
-        ret = LDB_ERR_FMT_DAT;
-        goto LDB_OPEN_FILE_DAT_ERR;
-    }
+    if (header.format != LDB_FORMAT_1)
+        exit_function(LDB_ERR_FMT_DAT);
 
     obj->format = header.format;
     obj->milestone = header.milestone;
@@ -932,19 +944,19 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
     else if (pos + sizeof(ldb_record_dat_t) > len)
     {
         if (!ldb_zeroize(obj->dat_fp, pos))
-            goto LDB_OPEN_FILE_DAT_ERR_WRITE;
+            exit_function(LDB_ERR_WRITE_DAT);
     }
     else
     {
         // read first entry
         if (fread(&record, sizeof(ldb_record_dat_t), 1, obj->dat_fp) != 1) 
-            goto LDB_OPEN_FILE_DAT_ERR_READ;
+            exit_function(LDB_ERR_READ_DAT);
 
         // case first record is empty
         if (record.seqnum == 0) {
             memset(&record, 0x00, sizeof(ldb_record_dat_t));
             if (!ldb_zeroize(obj->dat_fp, pos))
-                goto LDB_OPEN_FILE_DAT_ERR_WRITE;
+                exit_function(LDB_ERR_WRITE_DAT);
         }
 
         pos += sizeof(ldb_record_dat_t);
@@ -956,12 +968,12 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
             pos -= record.metadata_len + record.data_len;
             memset(&record, 0x00, sizeof(ldb_record_dat_t));
             if (!ldb_zeroize(obj->dat_fp, pos))
-                goto LDB_OPEN_FILE_DAT_ERR_WRITE;
+                exit_function(LDB_ERR_WRITE_DAT);
         }
         else
         {
             if (fseek(obj->dat_fp, (long) pos, SEEK_SET) != 0)
-                goto LDB_OPEN_FILE_DAT_ERR_READ;
+                exit_function(LDB_ERR_READ_DAT);
         }
 
         obj->first_seqnum = record.seqnum;
@@ -978,7 +990,7 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
     while (pos + sizeof(ldb_record_dat_t) <= len)
     {
         if (fread(&record, sizeof(ldb_record_dat_t), 1, obj->dat_fp) != 1) 
-            goto LDB_OPEN_FILE_DAT_ERR_READ;
+            exit_function(LDB_ERR_READ_DAT);
 
         // case record removed (rollback)
         if (record.seqnum == 0 || obj->first_seqnum == 0)
@@ -987,10 +999,10 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
         pos += sizeof(ldb_record_dat_t);
 
         if (record.seqnum != obj->last_seqnum + 1) 
-            goto LDB_OPEN_FILE_DAT_ERR_FMT;
+            exit_function(LDB_ERR_FMT_DAT);
 
         if (record.timestamp < obj->last_timestamp)
-            goto LDB_OPEN_FILE_DAT_ERR_FMT;
+            exit_function(LDB_ERR_FMT_DAT);
 
         pos += record.metadata_len + record.data_len;
 
@@ -1002,36 +1014,24 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
         }
 
         if (fseek(obj->dat_fp, (long) pos, SEEK_SET) != 0)
-            goto LDB_OPEN_FILE_DAT_ERR_READ;
+            exit_function(LDB_ERR_READ_DAT);
 
         obj->last_seqnum = record.seqnum;
         obj->last_timestamp = record.timestamp;
     }
 
     if (!ldb_zeroize(obj->dat_fp, pos))
-        goto LDB_OPEN_FILE_DAT_ERR_WRITE;
+        exit_function(LDB_ERR_WRITE_DAT);
 
     return LDB_OK;
 
-LDB_OPEN_FILE_DAT_ERR:
+LDB_OPEN_FILE_DAT_END:
     ldb_close_file_dat(obj);
     return ret;
-
-LDB_OPEN_FILE_DAT_ERR_READ:
-    ldb_close_file_idx(obj);
-    ldb_set_error(obj, "Error reading file %s%s", obj->name, LDB_EXT_DAT);
-    return LDB_ERR_READ_IDX;
-
-LDB_OPEN_FILE_DAT_ERR_WRITE:
-    ldb_close_file_idx(obj);
-    ldb_set_error(obj, "Error writing file %s%s", obj->name, LDB_EXT_DAT);
-    return LDB_ERR_WRITE_IDX;
-
-LDB_OPEN_FILE_DAT_ERR_FMT:
-    ldb_close_file_dat(obj);
-    ldb_set_error(obj, "Corrupted file: %s%s", obj->name, LDB_EXT_DAT);
-    return LDB_ERR_FMT_DAT;
 }
+
+#undef exit_function
+#define exit_function(errnum) do { ret = errnum; goto LDB_OPEN_FILE_IDX_END; } while(0)
 
 /**
  * pre-conditions:
@@ -1069,49 +1069,41 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
 
     obj->idx_fp = fopen(obj->idx_path, "r+");
 
-    if (obj->idx_fp == NULL) {
-        ldb_set_error(obj, "Cannot open file '%s': %s", obj->idx_path, strerror(errno));
-        return LDB_ERR_FILE;
-    }
+    if (obj->idx_fp == NULL)
+        return LDB_ERR_OPEN_IDX;
 
     len = ldb_get_file_size(obj->idx_fp);
 
     if (fread(&header, sizeof(ldb_header_idx_t), 1, obj->idx_fp) != 1)
-        goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+        exit_function(LDB_ERR_FMT_IDX);
 
     pos += sizeof(ldb_header_idx_t);
 
     if (header.magic_number != LDB_MAGIC_NUMBER)
-        goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+        exit_function(LDB_ERR_FMT_IDX);
 
-    if (header.format != LDB_FORMAT_1) {
-        ldb_set_error(obj, "Unrecognized database format (idx)");
-        ret = LDB_ERR_FMT_IDX;
-        goto LDB_OPEN_FILE_IDX_ERR;
-    }
+    if (header.format != LDB_FORMAT_1)
+        exit_function(LDB_ERR_FMT_IDX);
 
-    if (header.format != obj->format) {
-        ldb_set_error(obj, "Database format mismatch (idx)");
-        ret = LDB_ERR_FMT_IDX;
-        goto LDB_OPEN_FILE_IDX_ERR;
-    }
+    if (header.format != obj->format)
+        exit_function(LDB_ERR_FMT_IDX);
 
     if (pos + sizeof(ldb_record_idx_t) <= len)
     {
         // read first entry
         if (fread(&record_0, sizeof(ldb_record_idx_t), 1, obj->idx_fp) != 1) 
-            goto LDB_OPEN_FILE_IDX_ERR_READ_IDX;
+            exit_function(LDB_ERR_READ_IDX);
 
         pos += sizeof(ldb_record_idx_t);
 
         if (record_0.seqnum != obj->first_seqnum)
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+            exit_function(LDB_ERR_FMT_IDX);
 
         if (record_0.timestamp != obj->first_timestamp)
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+            exit_function(LDB_ERR_FMT_IDX);
 
         if (record_0.seqnum != 0 && record_0.pos != sizeof(ldb_header_dat_t))
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+            exit_function(LDB_ERR_FMT_IDX);
     }
 
     record_n = record_0;
@@ -1129,7 +1121,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         while (pos + sizeof(ldb_record_idx_t) <= len)
         {
             if (fread(&aux, sizeof(ldb_record_idx_t), 1, obj->idx_fp) != 1) 
-                goto LDB_OPEN_FILE_IDX_ERR_READ_IDX;
+                exit_function(LDB_ERR_READ_IDX);
 
             if (aux.seqnum == 0)
                 break;
@@ -1137,16 +1129,16 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
             pos += sizeof(ldb_record_idx_t);
 
             if (aux.seqnum != record_n.seqnum + 1 || aux.timestamp < record_n.timestamp || aux.pos < record_n.pos + sizeof(ldb_record_dat_t))
-                goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+                exit_function(LDB_ERR_FMT_IDX);
 
             if (fseek(obj->dat_fp, (long) aux.pos, SEEK_SET) != 0)
-                goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+                exit_function(LDB_ERR_READ_IDX);
 
             if (fread(&record_dat, sizeof(ldb_record_dat_t), 1, obj->dat_fp) != 1) 
-                goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+                exit_function(LDB_ERR_READ_IDX);
 
             if (aux.seqnum != record_dat.seqnum || aux.timestamp != record_dat.timestamp)
-                goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+                exit_function(LDB_ERR_FMT_IDX);
 
             record_n = aux;
         }
@@ -1156,7 +1148,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         // search last valid position
         long rem = (len - sizeof(ldb_header_idx_t)) % sizeof(ldb_record_idx_t);
         if (fseek(obj->idx_fp, -rem, SEEK_END) != 0)
-            goto LDB_OPEN_FILE_IDX_ERR_READ_IDX;
+            exit_function(LDB_ERR_READ_IDX);
 
         pos = (size_t)(len) - (size_t)(rem);
 
@@ -1164,10 +1156,10 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         while (pos > sizeof(ldb_header_idx_t))
         {
             if (fseek(obj->idx_fp, pos - sizeof(ldb_record_idx_t), SEEK_SET) != 0)
-                goto LDB_OPEN_FILE_IDX_ERR_READ_IDX;
+                exit_function(LDB_ERR_READ_IDX);
 
             if (fread(&record_n, sizeof(ldb_record_idx_t), 1, obj->idx_fp) != 1) 
-                goto LDB_OPEN_FILE_IDX_ERR_READ_IDX;
+                exit_function(LDB_ERR_READ_IDX);
 
             if (record_n.seqnum != 0)
                 break;
@@ -1178,10 +1170,10 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
 
     // at this point pos is just after the last record distinct than 0
     if (fseek(obj->idx_fp, (long) pos, SEEK_SET) != 0)
-        goto LDB_OPEN_FILE_IDX_ERR_READ_IDX;
+        exit_function(LDB_ERR_READ_IDX);
 
     if (!ldb_zeroize(obj->idx_fp, pos))
-        goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+        exit_function(LDB_ERR_WRITE_IDX);
 
     // case idx with no records
     if (record_0.seqnum == 0)
@@ -1197,7 +1189,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
             obj->last_timestamp = obj->first_timestamp;
 
             if ((ret = ldb_append_record_idx(obj, &record_0)) != LDB_OK)
-                goto LDB_OPEN_FILE_IDX_ERR;
+                goto LDB_OPEN_FILE_IDX_END;
 
             record_n = record_0;
         }
@@ -1208,13 +1200,13 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         size_t diff = record_n.seqnum - record_0.seqnum;
 
         if (record_n.seqnum < record_0.seqnum || record_n.timestamp < record_0.timestamp)
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+            exit_function(LDB_ERR_FMT_IDX);
 
         if (pos != sizeof(ldb_header_idx_t) + (diff + 1) * sizeof(ldb_record_idx_t))
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+            exit_function(LDB_ERR_FMT_IDX);
 
         if (record_n.pos < sizeof(ldb_header_dat_t) + (diff + 1) * sizeof(ldb_record_dat_t))
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+            exit_function(LDB_ERR_FMT_IDX);
 
         obj->last_seqnum = record_n.seqnum;
         obj->last_timestamp = record_n.timestamp;
@@ -1233,26 +1225,26 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     len = ldb_get_file_size(obj->dat_fp);
 
     if (fseek(obj->dat_fp, (long) pos, SEEK_SET) != 0)
-        goto LDB_OPEN_FILE_IDX_ERR_READ_DAT;
+        exit_function(LDB_ERR_READ_DAT);
 
     if (pos + sizeof(ldb_record_dat_t) > len)
-        goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+        exit_function(LDB_ERR_FMT_IDX);
 
     if (fread(&record_dat, sizeof(ldb_record_dat_t), 1, obj->dat_fp) != 1) 
-        goto LDB_OPEN_FILE_IDX_ERR_READ_DAT;
+        exit_function(LDB_ERR_READ_DAT);
 
     pos += sizeof(ldb_record_dat_t);
 
     if (record_dat.seqnum != record_n.seqnum || record_dat.timestamp != record_n.timestamp)
-        goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX; 
+        exit_function(LDB_ERR_FMT_IDX);
 
     pos += record_dat.metadata_len + record_dat.data_len;
 
     if (pos > len)
-        goto LDB_OPEN_FILE_IDX_ERR_FMT_IDX;
+        exit_function(LDB_ERR_FMT_IDX);
 
     if (fseek(obj->dat_fp, (long) pos, SEEK_SET) != 0)
-        goto LDB_OPEN_FILE_IDX_ERR_READ_DAT;
+        exit_function(LDB_ERR_READ_DAT);
 
     obj->dat_end = pos;
 
@@ -1260,7 +1252,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     while (pos + sizeof(ldb_record_dat_t) <= len)
     {
         if (fread(&record_dat, sizeof(ldb_record_dat_t), 1, obj->dat_fp) != 1) 
-            goto LDB_OPEN_FILE_IDX_ERR_READ_DAT;
+           exit_function(LDB_ERR_READ_DAT);
         
         if (record_dat.seqnum == 0)
             break;
@@ -1268,10 +1260,10 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         pos += sizeof(ldb_record_dat_t);
 
         if (record_dat.seqnum != obj->last_seqnum + 1)
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_DAT;
+            exit_function(LDB_ERR_FMT_DAT);
 
         if (record_dat.timestamp < obj->last_timestamp)
-            goto LDB_OPEN_FILE_IDX_ERR_FMT_DAT;
+            exit_function(LDB_ERR_FMT_DAT);
 
         pos += record_dat.metadata_len + record_dat.data_len;
 
@@ -1283,7 +1275,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         }
 
         if (fseek(obj->dat_fp, (long) pos, SEEK_SET) != 0)
-            goto LDB_OPEN_FILE_IDX_ERR_READ_DAT;
+            exit_function(LDB_ERR_READ_DAT);
 
         record_n.seqnum = record_dat.seqnum;
         record_n.timestamp = record_dat.timestamp;
@@ -1294,45 +1286,22 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         obj->dat_end = (size_t) ftell(obj->dat_fp);
 
         if ((ret = ldb_append_record_idx(obj, &record_n)) != LDB_OK)
-            goto LDB_OPEN_FILE_IDX_ERR;
+            goto LDB_OPEN_FILE_IDX_END;
 
         assert(obj->dat_end == pos);
     }
 
     if (!ldb_zeroize(obj->dat_fp, pos))
-        goto LDB_OPEN_FILE_IDX_ERR_WRITE_DAT;
+        exit_function(LDB_ERR_WRITE_DAT);
 
     return LDB_OK;
 
-LDB_OPEN_FILE_IDX_ERR:
+LDB_OPEN_FILE_IDX_END:
     ldb_close_file_idx(obj);
     return ret;
-
-LDB_OPEN_FILE_IDX_ERR_READ_IDX:
-    ldb_close_file_idx(obj);
-    ldb_set_error(obj, "Error reading file %s%s", obj->name, LDB_EXT_IDX);
-    return LDB_ERR_READ_IDX;
-
-LDB_OPEN_FILE_IDX_ERR_FMT_IDX:
-    ldb_close_file_idx(obj);
-    ldb_set_error(obj, "Corrupted file: %s%s", obj->name, LDB_EXT_IDX);
-    return LDB_ERR_FMT_IDX;
-
-LDB_OPEN_FILE_IDX_ERR_READ_DAT:
-    ldb_close_file_idx(obj);
-    ldb_set_error(obj, "Error reading file %s%s", obj->name, LDB_EXT_DAT);
-    return LDB_ERR_READ_IDX;
-
-LDB_OPEN_FILE_IDX_ERR_WRITE_DAT:
-    ldb_close_file_idx(obj);
-    ldb_set_error(obj, "Error writing file %s%s", obj->name, LDB_EXT_DAT);
-    return LDB_ERR_WRITE_IDX;
-
-LDB_OPEN_FILE_IDX_ERR_FMT_DAT:
-    ldb_close_file_idx(obj);
-    ldb_set_error(obj, "Corrupted file: %s%s", obj->name, LDB_EXT_DAT);
-    return LDB_ERR_FMT_IDX;
 }
+
+#undef exit_function
 
 const char * ldb_version(void)
 {
@@ -1346,24 +1315,20 @@ const char * ldb_version(void)
     return version_str;
 }
 
+#define exit_function(errnum) do { ret = errnum; goto LDB_OPEN_END; } while(0)
+
 int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
 {
     if (path == NULL || name == NULL || obj == NULL)
         return LDB_ERR_ARG;
 
+    if (!ldb_is_valid_path(path))
+        return LDB_ERR_PATH;
+
+    if (!ldb_is_valid_name(name))
+        return  LDB_ERR_NAME;
+
     int ret = LDB_OK;
-
-    if (!ldb_is_valid_path(path)) {
-        ldb_set_error(obj, "Cannot acces folder '%s'", path);
-        ret = LDB_ERR_PATH;
-        goto LDB_OPEN_ERR;
-    }
-
-    if (!ldb_is_valid_name(name)) {
-        ldb_set_error(obj, "Invalid db name '%s'", name);
-        ret = LDB_ERR_NAME;
-        goto LDB_OPEN_ERR;
-    }
 
     memset(obj, 0x00, sizeof(ldb_db_t));
 
@@ -1373,51 +1338,39 @@ int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
     obj->idx_path = ldb_create_filename(path, name, LDB_EXT_IDX);
     obj->dat_end = sizeof(ldb_header_dat_t);
 
-    if (!obj->name || !obj->path || !obj->dat_path || !obj->idx_path) {
-        ret = LDB_ERR_MEM;
-        goto LDB_OPEN_ERR;
-    }
+    if (!obj->name || !obj->path || !obj->dat_path || !obj->idx_path)
+        exit_function(LDB_ERR_MEM);
 
     // case dat file not exist
     if (access(obj->dat_path, F_OK) != 0)
     {
         remove(obj->idx_path);
 
-        if (!ldb_create_file_dat(obj->dat_path)) {
-            ldb_set_error(obj, "Cannot create file '%s'", obj->dat_path);
-            ret = LDB_ERR_FILE;
-            goto LDB_OPEN_ERR;
-        }
+        if (!ldb_create_file_dat(obj->dat_path))
+            exit_function(LDB_ERR_OPEN_DAT);
     }
 
     // case dat file not exist
     if (access(obj->idx_path, F_OK) != 0)
     {
-        if (!ldb_create_file_idx(obj->idx_path)) {
-            ldb_set_error(obj, "Cannot create file '%s'", obj->idx_path);
-            ret = LDB_ERR_FILE;
-            goto LDB_OPEN_ERR;
-        }
+        if (!ldb_create_file_idx(obj->idx_path))
+            exit_function(LDB_ERR_OPEN_IDX);
     }
 
     if ((ret = ldb_open_file_dat(obj, check)) != LDB_OK)
-        goto LDB_OPEN_ERR;
+        goto LDB_OPEN_END;
 
     ret = ldb_open_file_idx(obj, check);
     if (ret == LDB_ERR_READ_IDX || ret == LDB_ERR_FMT_IDX)
     {
         // try to rebuild the index file
-        LDB_FREE(obj->error);
         remove(obj->idx_path);
 
-        if (!ldb_create_file_idx(obj->idx_path)) {
-            ldb_set_error(obj, "Cannot create file '%s'", obj->idx_path);
-            ret = LDB_ERR_FILE;
-            goto LDB_OPEN_ERR;
-        }
+        if (!ldb_create_file_idx(obj->idx_path))
+            exit_function(LDB_ERR_OPEN_IDX);
 
         if ((ret = ldb_open_file_idx(obj, check)) != LDB_OK)
-            goto LDB_OPEN_ERR;
+            goto LDB_OPEN_END;
     }
 
     assert(!feof(obj->dat_fp));
@@ -1427,10 +1380,12 @@ int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
 
     return LDB_OK;
 
-LDB_OPEN_ERR:
+LDB_OPEN_END:
     ldb_free_db(obj);
     return ret;
 }
+
+#undef exit_function
 
 int ldb_close(ldb_db_t *obj)
 {
