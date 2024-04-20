@@ -1,7 +1,5 @@
 CFLAGS= -std=gnu11 -Wall -Wextra -Wpedantic -Wnull-dereference
 
-# -Wconversion
-
 all: tests coverage cppcheck valgrind
 
 tests: logdb.h tests.c
@@ -23,8 +21,8 @@ valgrind: logdb.h tests.c
 	valgrind --tool=memcheck --leak-check=yes ./tests-valgrind
 
 clean: 
-	rm -f tests test.dat test.idx
+	rm -f tests test.dat test.idx test.tmp
 	rm -f tests-coverage
 	rm -f tests-valgrind
 	rm -f *.gcda *.gcno
-	rm -rf coverage
+	rm -rf coverage/

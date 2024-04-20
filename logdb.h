@@ -65,6 +65,7 @@ SOFTWARE.
 #define LDB_ERR_ENTRY_METADATA   -16
 #define LDB_ERR_ENTRY_DATA       -17
 #define LDB_ERR_NOT_FOUND        -18
+#define LDB_ERR_TMP_FILE         -19
 
 #ifdef __cplusplus
 extern "C" {
@@ -368,6 +369,7 @@ const char * ldb_strerror(int errnum)
         case LDB_ERR_ENTRY_METADATA: return "Metadata not found";
         case LDB_ERR_ENTRY_DATA: return "Data not found";
         case LDB_ERR_NOT_FOUND: return "No results";
+        case LDB_ERR_TMP_FILE: return "Error creating temp file";
         default: return "Unknow error";
     }
 }
@@ -384,32 +386,26 @@ static uint64_t ldb_clamp(uint64_t val, uint64_t lo, uint64_t hi)
     return (val < lo ? lo : (hi < val ? hi : val));
 }
 
-static int ldb_close_file_dat(ldb_db_t *obj)
+static int ldb_close_files(ldb_db_t *obj)
 {
-    if (!obj || !obj->dat_fp)
+    if (!obj)
         return LDB_OK;
 
     int ret = LDB_OK;
 
-    if (fclose(obj->dat_fp) != 0)
+    if (obj->idx_fp != NULL && fclose(obj->idx_fp) != 0)
+        ret = LDB_ERR_WRITE_IDX;
+
+    if (obj->dat_fp != NULL && fclose(obj->dat_fp) != 0)
         ret = LDB_ERR_WRITE_DAT;
 
     obj->dat_fp = NULL;
-
-    return ret;
-}
-
-static int ldb_close_file_idx(ldb_db_t *obj)
-{
-    if (!obj || !obj->idx_fp)
-        return LDB_OK;
-
-    int ret = LDB_OK;
-
-    if (fclose(obj->idx_fp) != 0)
-        ret = LDB_ERR_WRITE_IDX;
-
     obj->idx_fp = NULL;
+    obj->first_seqnum = 0;
+    obj->first_timestamp = 0;
+    obj->last_seqnum = 0;
+    obj->last_timestamp = 0;
+    obj->dat_end = 0;
 
     return ret;
 }
@@ -419,8 +415,7 @@ static int ldb_free_db(ldb_db_t *obj)
     if (obj == NULL)
         return LDB_OK;
 
-    int rc1 = ldb_close_file_dat(obj);
-    int rc2 = ldb_close_file_idx(obj);
+    int ret = ldb_close_files(obj);
 
     LDB_FREE(obj->name);
     LDB_FREE(obj->path);
@@ -428,13 +423,8 @@ static int ldb_free_db(ldb_db_t *obj)
     LDB_FREE(obj->idx_path);
 
     obj->milestone = 0;
-    obj->first_seqnum = 0;
-    obj->first_timestamp = 0;
-    obj->last_seqnum = 0;
-    obj->last_timestamp = 0;
-    obj->dat_end = 0;
 
-    return (rc1 != LDB_OK ? rc1 : (rc2 != LDB_OK ? rc2 : LDB_OK));
+    return ret;
 }
 
 void ldb_free_entry(ldb_entry_t *entry)
@@ -651,11 +641,11 @@ static size_t ldb_get_file_size(FILE *fp)
     return (size_t)(len < 0 ? 0 : len);
 }
 
-// Set zero's from pos until the end of the file
-// Does not update file if already zeroized
-// Preserve current file position
-// Flush file
-// On error return false, otherwhise returns true
+// Set zero's from pos until the end of the file.
+// Does not update file if already zeroized.
+// Preserve current file position.
+// Flush file.
+// On error return false, otherwhise returns true.
 static bool ldb_zeroize(FILE *fp, size_t pos)
 {
     assert(fp);
@@ -706,6 +696,63 @@ static bool ldb_zeroize(FILE *fp, size_t pos)
 LDB_ZEROIZE_END:
     fseek(fp, pos, SEEK_SET);
     assert(!feof(fp) && !ferror(fp));
+    return ret;
+}
+
+// Copy file1 content in range [pos0,pos1] to file2 at pos2.
+// Preserve current file positions.
+// Flush destination file.
+// On error return false, otherwhise returns true.
+static bool ldb_copy_file(FILE *fp1, size_t pos0, size_t pos1, FILE *fp2, size_t pos2)
+{
+    assert(fp1);
+    assert(!feof(fp1));
+    assert(!ferror(fp1));
+    assert(fp2);
+    assert(!feof(fp2));
+    assert(!ferror(fp2));
+    assert(pos0 <= pos1);
+
+    bool ret = false;
+    char buf[4096] = {0};
+    size_t orig1 = ftell(fp1);
+    size_t orig2 = ftell(fp2);
+    size_t len1 = ldb_get_file_size(fp1);
+    size_t len2 = ldb_get_file_size(fp2);
+
+    if (pos0 > pos1 || pos1 > len1 || pos2 > len2)
+        return false;
+
+    if (pos0 == pos1)
+        return true;
+
+    if (fseek(fp1, (long) pos0, SEEK_SET) != 0)
+        goto LDB_COPY_FILE_END;
+
+    if (fseek(fp2, (long) pos2, SEEK_SET) != 0)
+        goto LDB_COPY_FILE_END;
+
+    for (size_t pos = pos0; pos < pos1; pos += sizeof(buf))
+    {
+        size_t num_bytes = LDB_MIN((long) pos1 - (long) pos, (long) sizeof(buf));
+
+        if (fread(buf, 1, num_bytes, fp1) != num_bytes)
+            goto LDB_COPY_FILE_END;
+
+        if (fwrite(buf, num_bytes, 1, fp2) != 1)
+            goto LDB_COPY_FILE_END;
+    }
+
+    if (fflush(fp2) != 0)
+        goto LDB_COPY_FILE_END;
+
+    ret = true;
+
+LDB_COPY_FILE_END:
+    fseek(fp1, orig1, SEEK_SET);
+    fseek(fp2, orig2, SEEK_SET);
+    assert(!feof(fp1) && !ferror(fp1));
+    assert(!feof(fp2) && !ferror(fp2));
     return ret;
 }
 
@@ -1026,7 +1073,7 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
     return LDB_OK;
 
 LDB_OPEN_FILE_DAT_END:
-    ldb_close_file_dat(obj);
+    ldb_close_files(obj);
     return ret;
 }
 
@@ -1297,7 +1344,8 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     return LDB_OK;
 
 LDB_OPEN_FILE_IDX_END:
-    ldb_close_file_idx(obj);
+    fclose(obj->idx_fp);
+    obj->idx_fp = NULL;
     return ret;
 }
 
@@ -1361,7 +1409,7 @@ int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
         goto LDB_OPEN_END;
 
     ret = ldb_open_file_idx(obj, check);
-    if (ret == LDB_ERR_READ_IDX || ret == LDB_ERR_FMT_IDX)
+    if (ret == LDB_ERR_READ_IDX || ret == LDB_ERR_WRITE_IDX || ret == LDB_ERR_FMT_IDX)
     {
         // try to rebuild the index file
         remove(obj->idx_path);
@@ -1627,6 +1675,7 @@ int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num)
     if (num)
         *num = 0;
 
+    // case nothing to rollback
     if (obj->last_seqnum <= seqnum)
         return LDB_OK;
 
@@ -1692,6 +1741,126 @@ int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num)
     return LDB_OK;
 }
 
+#define exit_function(errnum) do { ret = errnum; goto LDB_PURGE_END; } while(0)
+
+int ldb_purge(ldb_db_t *obj, uint64_t seqnum, size_t *num)
+{
+    if (!obj)
+        return LDB_ERR_ARG;
+
+    if (!obj->dat_fp || feof(obj->dat_fp) || ferror(obj->dat_fp))
+        return LDB_ERR;
+
+    if (!obj->idx_fp || feof(obj->idx_fp) || ferror(obj->idx_fp))
+        return LDB_ERR;
+
+    if (num)
+        *num = 0;
+
+    // case no entries to purge
+    if (seqnum <= obj->first_seqnum || obj->first_seqnum == 0)
+        return LDB_OK;
+
+    int ret = LDB_ERR;
+    ldb_record_idx_t record_idx = {0};
+    ldb_record_dat_t record_dat = {0};
+    char *tmp_path = NULL;
+    FILE *tmp_fp = NULL;
+
+    // case purge all entries
+    if (obj->last_seqnum < seqnum)
+    {
+        if (num)
+            *num = obj->last_seqnum - obj->first_seqnum + 1;
+
+        ldb_close_files(obj);
+
+        remove(obj->dat_path);
+        remove(obj->idx_path);
+
+        if (!ldb_create_file_dat(obj->dat_path))
+            exit_function(LDB_ERR_OPEN_DAT);
+
+        if (!ldb_create_file_idx(obj->idx_path))
+            exit_function(LDB_ERR_OPEN_IDX);
+
+        if ((ret = ldb_open_file_dat(obj, false)) != LDB_OK)
+            return ret;
+
+        if ((ret = ldb_open_file_idx(obj, false)) != LDB_OK)
+            return ret;
+
+        return LDB_OK;
+    }
+
+    // case purge some entries
+
+    if (num)
+        *num = seqnum - obj->first_seqnum;
+
+    if ((ret = ldb_read_record_idx(obj, seqnum, &record_idx)) != LDB_OK)
+        return ret;
+
+    size_t pos = record_idx.pos;
+
+    if ((ret = ldb_read_record_dat(obj, pos, &record_dat)) != LDB_OK)
+        return ret;
+
+    if (record_dat.seqnum != seqnum)
+        return LDB_ERR_FMT_IDX;
+
+    tmp_path = ldb_create_filename(obj->path, obj->name, LDB_EXT_TMP);
+    tmp_fp = fopen(tmp_path, "w");
+
+    if (tmp_fp == NULL)
+        return LDB_ERR_TMP_FILE;
+
+    ldb_header_dat_t header = {
+        .magic_number = LDB_MAGIC_NUMBER,
+        .text = {0},
+        .format = LDB_FORMAT_1,
+        .milestone = 0
+    };
+
+    strncpy(header.text, LDB_TEXT_DAT, sizeof(header.text));
+
+    if (fwrite(&header, sizeof(ldb_header_dat_t), 1, tmp_fp) != 1)
+        exit_function(LDB_ERR_TMP_FILE);
+
+    if (!ldb_copy_file(obj->dat_fp, pos, obj->dat_end, tmp_fp, sizeof(ldb_header_dat_t)))
+        exit_function(LDB_ERR_TMP_FILE);
+
+    if (fclose(tmp_fp) != 0)
+        exit_function(LDB_ERR_TMP_FILE);
+
+    if ((ret = ldb_close_files(obj)) != LDB_OK)
+        goto LDB_PURGE_END;
+
+    remove(obj->idx_path);
+
+    if (rename(tmp_path, obj->dat_path) != 0)
+        exit_function(LDB_ERR_TMP_FILE);
+
+    if (!ldb_create_file_idx(obj->idx_path))
+        exit_function(LDB_ERR_OPEN_IDX);
+
+    if ((ret = ldb_open_file_dat(obj, false)) != LDB_OK)
+        goto LDB_PURGE_END;
+
+    if (( ret = ldb_open_file_idx(obj, false)) != LDB_OK)
+        goto LDB_PURGE_END;
+
+    free(tmp_path);
+    return LDB_OK;
+
+LDB_PURGE_END:
+    if (tmp_fp != NULL) fclose(tmp_fp);
+    ldb_close_files(obj);
+    free(tmp_path);
+    return ret;
+}
+
+#undef exit_function
 #undef LDB_FREE
 #undef LDB_MIN
 #undef LDB_MAX
