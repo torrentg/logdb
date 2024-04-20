@@ -1064,14 +1064,13 @@ void test_rollback_invalid_args(void)
 {
     ldb_db_t db = {0};
 
-    TEST_ASSERT(ldb_rollback(NULL, 1, NULL) == LDB_ERR);
-    TEST_ASSERT(ldb_rollback(&db, 1, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_rollback(NULL, 1) == LDB_ERR);
+    TEST_ASSERT(ldb_rollback(&db, 1) == LDB_ERR);
 }
 
 void test_rollback_nominal_case(void)
 {
     ldb_db_t db = {0};
-    size_t num = 0;
     size_t end = 0;
 
     remove("test.dat");
@@ -1079,49 +1078,41 @@ void test_rollback_nominal_case(void)
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
 
-    TEST_ASSERT(ldb_rollback(&db, 0, &num) == LDB_OK);
-    TEST_ASSERT(num == 0);
-    TEST_ASSERT(ldb_rollback(&db, 1, &num) == LDB_OK);
-    TEST_ASSERT(num == 0);
+    TEST_ASSERT(ldb_rollback(&db, 0) == 0);
+    TEST_ASSERT(ldb_rollback(&db, 1) == 0);
 
     append_entries(&db, 20, 314);
     end = db.dat_end;
 
-    TEST_ASSERT(ldb_rollback(&db, 400, &num) == LDB_OK);
-    TEST_ASSERT(num == 0);
+    TEST_ASSERT(ldb_rollback(&db, 400) == 0);
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 314);
     TEST_ASSERT(db.dat_end == end);
 
-    TEST_ASSERT(ldb_rollback(&db, 314, &num) == LDB_OK);
-    TEST_ASSERT(num == 0);
+    TEST_ASSERT(ldb_rollback(&db, 314) == 0);
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 314);
     TEST_ASSERT(db.dat_end == end);
 
-    TEST_ASSERT(ldb_rollback(&db, 313, &num) == LDB_OK);
-    TEST_ASSERT(num == 1);
+    TEST_ASSERT(ldb_rollback(&db, 313) == 1);
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 313);
     TEST_ASSERT(db.dat_end < end);
     end = db.dat_end;
 
-    TEST_ASSERT(ldb_rollback(&db, 100, &num) == LDB_OK);
-    TEST_ASSERT(num == 213);
+    TEST_ASSERT(ldb_rollback(&db, 100) == 213);
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 100);
     TEST_ASSERT(db.dat_end < end);
     end = db.dat_end;
 
-    TEST_ASSERT(ldb_rollback(&db, 20, &num) == LDB_OK);
-    TEST_ASSERT(num == 80);
+    TEST_ASSERT(ldb_rollback(&db, 20) == 80);
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 20);
     TEST_ASSERT(db.dat_end < end);
     end = db.dat_end;
 
-    TEST_ASSERT(ldb_rollback(&db, 0, &num) == LDB_OK);
-    TEST_ASSERT(num == 1);
+    TEST_ASSERT(ldb_rollback(&db, 0) == 1);
     TEST_ASSERT(db.first_seqnum == 0);
     TEST_ASSERT(db.last_seqnum == 0);
     TEST_ASSERT(db.dat_end < end);
@@ -1133,30 +1124,25 @@ void test_purge_invalid_args(void)
 {
     ldb_db_t db = {0};
 
-    TEST_ASSERT(ldb_purge(NULL, 10, NULL) == LDB_ERR);
-    TEST_ASSERT(ldb_purge(&db, 10, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_purge(NULL, 10) == LDB_ERR);
+    TEST_ASSERT(ldb_purge(&db, 10) == LDB_ERR);
 }
 
 void test_purge_empty_db(void)
 {
     ldb_db_t db = {0};
-    size_t num = 0;
 
     remove("test.dat");
     remove("test.idx");
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-
-    TEST_ASSERT(ldb_purge(&db, 10, &num) == LDB_OK);
-    TEST_ASSERT(num == 0);
-
+    TEST_ASSERT(ldb_purge(&db, 10) == 0);
     ldb_close(&db);
 }
 
 void test_purge_nothing(void)
 {
     ldb_db_t db = {0};
-    size_t num = 0;
 
     remove("test.dat");
     remove("test.idx");
@@ -1166,8 +1152,7 @@ void test_purge_nothing(void)
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 314);
 
-    TEST_ASSERT(ldb_purge(&db, 10, &num) == LDB_OK);
-    TEST_ASSERT(num == 0);
+    TEST_ASSERT(ldb_purge(&db, 10) == 0);
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 314);
 
@@ -1177,7 +1162,6 @@ void test_purge_nothing(void)
 void test_purge_nominal_case(void)
 {
     ldb_db_t db = {0};
-    size_t num = 0;
 
     remove("test.dat");
     remove("test.idx");
@@ -1187,8 +1171,7 @@ void test_purge_nominal_case(void)
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 314);
 
-    TEST_ASSERT(ldb_purge(&db, 100, &num) == LDB_OK);
-    TEST_ASSERT(num == 80);
+    TEST_ASSERT(ldb_purge(&db, 100) == 80);
     TEST_ASSERT(db.first_seqnum == 100);
     TEST_ASSERT(db.last_seqnum == 314);
     ldb_close(&db);
@@ -1202,7 +1185,6 @@ void test_purge_nominal_case(void)
 void test_purge_all(void)
 {
     ldb_db_t db = {0};
-    size_t num = 0;
 
     remove("test.dat");
     remove("test.idx");
@@ -1212,8 +1194,7 @@ void test_purge_all(void)
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 314);
 
-    TEST_ASSERT(ldb_purge(&db, 1000, &num) == LDB_OK);
-    TEST_ASSERT(num == 295);
+    TEST_ASSERT(ldb_purge(&db, 1000) == 295);
     TEST_ASSERT(db.first_seqnum == 0);
     TEST_ASSERT(db.last_seqnum == 0);
     ldb_close(&db);

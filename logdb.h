@@ -324,27 +324,29 @@ int ldb_search_by_ts(ldb_db_t *obj, uint64_t ts, ldb_search_e mode, uint64_t *se
  * 
  * @param[in] obj Database to update.
  * @param[in] seqnum Sequence number from which records are removed (seqnum=0 removes all content).
- * @param[out] num Number of removed entries (can be NULL).
- * @return Error code (0 = OK).
+ * @return Number of removed entries, or error if negative.
  */
-int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num);
+int ldb_rollback(ldb_db_t *obj, uint64_t seqnum);
 
 /**
  * Remove all entries less than seqnum.
  * 
+ * This function is expensive because recreates the dat and idx files.
+ * 
  * To prevent data loss in case of outage we do:
- *   - Index file is removed.
- *   - A temporary data file is created.
- *   - Data is copied from data file to new data file.
- *   - Data file is replaced by the new one.
- *   - Index file is rebuilt.
+ *   - A tmp data file is created.
+ *   - Preserved records are copied from dat file to tmp file.
+ *   - Tmp, dat and idx are closed
+ *   - Idx file is removed
+ *   - Tmp file is renamed to dat
+ *   - Dat file is opened
+ *   - Idx file is rebuilt
  * 
  * @param[in] obj Database to update.
  * @param[in] seqnum Sequence number up to which records are removed.
- * @param[out] num Number of removed entries (can be NULL).
- * @return Error code (0 = OK).
+ * @return Number of removed entries, or error if negative.
  */
-int ldb_purge(ldb_db_t *obj, uint64_t seqnum, size_t *num);
+int ldb_purge(ldb_db_t *obj, uint64_t seqnum);
 
 /**
  * Update the milestone value.
@@ -1716,19 +1718,17 @@ int ldb_search_by_ts(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint6
     return LDB_OK;
 }
 
-int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num)
+int ldb_rollback(ldb_db_t *obj, uint64_t seqnum)
 {
     if (!ldb_is_valid_db(obj))
         return LDB_ERR;
 
-    if (num)
-        *num = 0;
-
     // case nothing to rollback
     if (obj->last_seqnum <= seqnum)
-        return LDB_OK;
+        return 0;
 
-    int rc = 0;
+    int rc = LDB_ERR;
+    int removed_entries = obj->last_seqnum - LDB_MAX(seqnum, obj->first_seqnum - 1);
     uint64_t csn = obj->last_seqnum;
     ldb_record_idx_t record_idx = {0};
     size_t dat_end_new = sizeof(ldb_header_dat_t);
@@ -1766,9 +1766,6 @@ int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num)
     if (fflush(obj->idx_fp) != 0)
         return LDB_ERR_WRITE_IDX;
 
-    if (num)
-        *num = obj->last_seqnum - LDB_MAX(seqnum, obj->first_seqnum - 1);
-
     // update status
     if (seqnum < obj->first_seqnum) {
         obj->first_seqnum = 0;
@@ -1787,24 +1784,22 @@ int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num)
     if (!ldb_zeroize(obj->dat_fp, dat_end_new))
         return LDB_ERR_WRITE_DAT;
 
-    return LDB_OK;
+    return removed_entries;
 }
 
 #define exit_function(errnum) do { ret = errnum; goto LDB_PURGE_END; } while(0)
 
-int ldb_purge(ldb_db_t *obj, uint64_t seqnum, size_t *num)
+int ldb_purge(ldb_db_t *obj, uint64_t seqnum)
 {
     if (!ldb_is_valid_db(obj))
         return LDB_ERR;
 
-    if (num)
-        *num = 0;
-
     // case no entries to purge
     if (seqnum <= obj->first_seqnum || obj->first_seqnum == 0)
-        return LDB_OK;
+        return 0;
 
     int ret = LDB_ERR;
+    int removed_entries = 0;
     ldb_record_idx_t record_idx = {0};
     ldb_record_dat_t record_dat = {0};
     char *tmp_path = NULL;
@@ -1813,8 +1808,7 @@ int ldb_purge(ldb_db_t *obj, uint64_t seqnum, size_t *num)
     // case purge all entries
     if (obj->last_seqnum < seqnum)
     {
-        if (num)
-            *num = obj->last_seqnum - obj->first_seqnum + 1;
+        removed_entries = obj->last_seqnum - obj->first_seqnum + 1;
 
         ldb_close_files(obj);
 
@@ -1833,13 +1827,12 @@ int ldb_purge(ldb_db_t *obj, uint64_t seqnum, size_t *num)
         if ((ret = ldb_open_file_idx(obj, false)) != LDB_OK)
             return ret;
 
-        return LDB_OK;
+        return removed_entries;
     }
 
     // case purge some entries
 
-    if (num)
-        *num = seqnum - obj->first_seqnum;
+    removed_entries = seqnum - obj->first_seqnum;
 
     if ((ret = ldb_read_record_idx(obj, seqnum, &record_idx)) != LDB_OK)
         return ret;
@@ -1894,7 +1887,7 @@ int ldb_purge(ldb_db_t *obj, uint64_t seqnum, size_t *num)
         goto LDB_PURGE_END;
 
     free(tmp_path);
-    return LDB_OK;
+    return removed_entries;
 
 LDB_PURGE_END:
     if (tmp_fp != NULL) fclose(tmp_fp);
