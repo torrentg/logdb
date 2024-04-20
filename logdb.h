@@ -38,6 +38,7 @@ SOFTWARE.
 #include <limits.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -445,6 +446,13 @@ static uint64_t ldb_get_millis(void)
 static uint64_t ldb_clamp(uint64_t val, uint64_t lo, uint64_t hi)
 {
     return (val < lo ? lo : (hi < val ? hi : val));
+}
+
+static bool ldb_is_valid_db(ldb_db_t *obj)
+{
+    return (obj &&
+            obj->dat_fp && !feof(obj->dat_fp) && !ferror(obj->dat_fp) &&
+            obj->idx_fp && !feof(obj->idx_fp) && !ferror(obj->idx_fp));
 }
 
 static int ldb_close_files(ldb_db_t *obj)
@@ -1503,14 +1511,11 @@ int ldb_close(ldb_db_t *obj)
 
 int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
 {
-    if (!obj || !entries)
+    if (!ldb_is_valid_db(obj))
+        return LDB_ERR;
+
+    if (!entries)
         return LDB_ERR_ARG;
-
-    if (!obj->dat_fp || feof(obj->dat_fp) || ferror(obj->dat_fp))
-        return LDB_ERR;
-
-    if (!obj->idx_fp || feof(obj->idx_fp) || ferror(obj->idx_fp))
-        return LDB_ERR;
 
     if (num != NULL)
         *num = 0;
@@ -1550,14 +1555,11 @@ int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
 
 int ldb_read(ldb_db_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t len, size_t *num)
 {
-    if (!obj || !entries)
+    if (!ldb_is_valid_db(obj))
+        return LDB_ERR;
+
+    if (!entries)
         return LDB_ERR_ARG;
-
-    if (!obj->dat_fp || feof(obj->dat_fp) || ferror(obj->dat_fp))
-        return LDB_ERR;
-
-    if (!obj->idx_fp || feof(obj->idx_fp) || ferror(obj->idx_fp))
-        return LDB_ERR;
 
     if (num != NULL)
         *num = 0;
@@ -1598,7 +1600,10 @@ int ldb_read(ldb_db_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t len, s
 
 int ldb_stats(ldb_db_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats)
 {
-    if (!obj || seqnum2 < seqnum1 || stats == NULL)
+    if (!ldb_is_valid_db(obj))
+        return LDB_ERR;
+
+    if (seqnum2 < seqnum1 || stats == NULL)
         return LDB_ERR_ARG;
 
     memset(stats, 0x00, sizeof(ldb_stats_t));
@@ -1607,16 +1612,10 @@ int ldb_stats(ldb_db_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *st
         return LDB_OK;
     }
 
-    if (!obj->dat_fp || feof(obj->dat_fp) || ferror(obj->dat_fp))
-        return LDB_ERR;
-
-    if (!obj->idx_fp || feof(obj->idx_fp) || ferror(obj->idx_fp))
-        return LDB_ERR;
-
     seqnum1 = ldb_clamp(seqnum1, obj->first_seqnum, obj->last_seqnum);
     seqnum2 = ldb_clamp(seqnum2, obj->first_seqnum, obj->last_seqnum);
 
-    int rc = 0;
+    int rc = LDB_ERR;
     ldb_record_idx_t record1 = {0};
     ldb_record_idx_t record2 = {0};
     ldb_record_dat_t record_dat = {0};
@@ -1648,21 +1647,16 @@ int ldb_stats(ldb_db_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *st
     return LDB_OK;
 }
 
-// LDB_SEARCH_LOWER : Returns the seqnum of the first entry having timestamp not less than the given value.
-// LDB_SEARCH_UPPER : Returns the seqnum of the first entry having timestamp greater than the given value.
 int ldb_search_by_ts(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint64_t *seqnum)
 {
-    if (!obj || !seqnum)
+    if (!ldb_is_valid_db(obj))
+        return LDB_ERR;
+
+    if (seqnum == NULL)
         return LDB_ERR_ARG;
 
     if (mode != LDB_SEARCH_LOWER && mode != LDB_SEARCH_UPPER)
         return LDB_ERR_ARG;
-
-    if (!obj->dat_fp || feof(obj->dat_fp) || ferror(obj->dat_fp))
-        return LDB_ERR;
-
-    if (!obj->idx_fp || feof(obj->idx_fp) || ferror(obj->idx_fp))
-        return LDB_ERR;
 
     *seqnum = 0;
 
@@ -1724,13 +1718,7 @@ int ldb_search_by_ts(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint6
 
 int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num)
 {
-    if (!obj)
-        return LDB_ERR_ARG;
-
-    if (!obj->dat_fp || feof(obj->dat_fp) || ferror(obj->dat_fp))
-        return LDB_ERR;
-
-    if (!obj->idx_fp || feof(obj->idx_fp) || ferror(obj->idx_fp))
+    if (!ldb_is_valid_db(obj))
         return LDB_ERR;
 
     if (num)
@@ -1806,13 +1794,7 @@ int ldb_rollback(ldb_db_t *obj, uint64_t seqnum, size_t *num)
 
 int ldb_purge(ldb_db_t *obj, uint64_t seqnum, size_t *num)
 {
-    if (!obj)
-        return LDB_ERR_ARG;
-
-    if (!obj->dat_fp || feof(obj->dat_fp) || ferror(obj->dat_fp))
-        return LDB_ERR;
-
-    if (!obj->idx_fp || feof(obj->idx_fp) || ferror(obj->idx_fp))
+    if (!ldb_is_valid_db(obj))
         return LDB_ERR;
 
     if (num)
@@ -1922,6 +1904,23 @@ LDB_PURGE_END:
 }
 
 #undef exit_function
+
+int ldb_update_milestone(ldb_db_t *obj, uint64_t seqnum)
+{
+    if (!ldb_is_valid_db(obj))
+        return LDB_ERR;
+
+    if (fseek(obj->dat_fp, offsetof(ldb_header_dat_t, milestone), SEEK_SET) != 0)
+        return LDB_ERR_READ_DAT;
+
+    if (fwrite(&seqnum, sizeof(uint64_t), 1, obj->dat_fp) != 1)
+        return LDB_ERR_WRITE_DAT;
+
+    obj->milestone = seqnum;
+
+    return LDB_OK;
+}
+
 #undef LDB_FREE
 #undef LDB_MIN
 #undef LDB_MAX

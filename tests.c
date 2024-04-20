@@ -680,8 +680,8 @@ void test_append_invalid_args(void)
     ldb_db_t db = {0};
     ldb_entry_t entry = {0};
 
-    TEST_ASSERT(ldb_append(NULL, &entry, 1, NULL) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_append(&db, NULL, 1, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_append(NULL, &entry, 1, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_append(&db, NULL, 1, NULL) == LDB_ERR);
     TEST_ASSERT(ldb_append(&db, &entry, 1, NULL) == LDB_ERR);
 }
 
@@ -871,8 +871,9 @@ void test_read_invalid_args(void)
     ldb_db_t db = {0};
     ldb_entry_t entries[3] = {0};
 
-    TEST_ASSERT(ldb_read(NULL, 1, entries, 3, NULL) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_read(&db, 1, NULL, 3, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_read(NULL, 1, entries, 3, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_read(&db, 1, NULL, 3, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_read(&db, 1, entries, 3, NULL) == LDB_ERR);
 }
 
 void test_read_empty_db(void)
@@ -947,9 +948,10 @@ void test_stats_invalid_args(void)
     ldb_db_t db = {0};
     ldb_stats_t stats = {0};
 
-    TEST_ASSERT(ldb_stats(NULL, 1, 1000, &stats) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_stats(&db, 1, 1000, NULL) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_stats(&db, 99, 1, &stats) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_stats(NULL, 1, 1000, &stats) == LDB_ERR);
+    TEST_ASSERT(ldb_stats(&db, 1, 1000, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_stats(&db, 99, 1, &stats) == LDB_ERR);
+    TEST_ASSERT(ldb_stats(&db, 1, 1000, &stats) == LDB_ERR);
 }
 
 void test_stats_nominal_case(void)
@@ -959,13 +961,6 @@ void test_stats_nominal_case(void)
 
     remove("test.dat");
     remove("test.idx");
-
-    TEST_ASSERT(ldb_stats(&db, 1, 1000, &stats) == LDB_OK);
-    TEST_ASSERT(stats.min_seqnum == 0);
-    TEST_ASSERT(stats.max_seqnum == 0);
-    TEST_ASSERT(stats.num_entries == 0);
-    TEST_ASSERT(stats.index_size == 0);
-    TEST_ASSERT(stats.data_size == 0);
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     append_entries(&db, 20, 314);
@@ -992,10 +987,15 @@ void test_search_invalid_args(void)
     ldb_db_t db = {0};
     uint64_t seqnum = 0;
 
-    TEST_ASSERT(ldb_search_by_ts(NULL, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_search_by_ts(NULL, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
+    TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
+
+    remove("test.dat");
+    remove("test.idx");
+    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_search_by_ts(&db, 1, (ldb_search_e)(9), &seqnum) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
+    ldb_close(&db);
 }
 
 void test_search_nominal_case(void)
@@ -1064,7 +1064,7 @@ void test_rollback_invalid_args(void)
 {
     ldb_db_t db = {0};
 
-    TEST_ASSERT(ldb_rollback(NULL, 1, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_rollback(NULL, 1, NULL) == LDB_ERR);
     TEST_ASSERT(ldb_rollback(&db, 1, NULL) == LDB_ERR);
 }
 
@@ -1133,7 +1133,7 @@ void test_purge_invalid_args(void)
 {
     ldb_db_t db = {0};
 
-    TEST_ASSERT(ldb_purge(NULL, 10, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_purge(NULL, 10, NULL) == LDB_ERR);
     TEST_ASSERT(ldb_purge(&db, 10, NULL) == LDB_ERR);
 }
 
@@ -1224,6 +1224,32 @@ void test_purge_all(void)
     ldb_close(&db);
 }
 
+void test_update_milestone(void)
+{
+    ldb_db_t db = {0};
+
+    TEST_ASSERT(ldb_update_milestone(NULL, 10) == LDB_ERR);
+    TEST_ASSERT(ldb_update_milestone(&db, 10) == LDB_ERR);
+
+
+    remove("test.dat");
+    remove("test.idx");
+
+    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
+    TEST_ASSERT(db.milestone == 0);
+    TEST_ASSERT(ldb_update_milestone(&db, 10) == LDB_OK);
+    TEST_ASSERT(db.milestone == 10);
+    TEST_ASSERT(ldb_update_milestone(&db, 42) == LDB_OK);
+    TEST_ASSERT(db.milestone == 42);
+    ldb_close(&db);
+
+    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
+    TEST_ASSERT(db.first_seqnum == 0);
+    TEST_ASSERT(db.last_seqnum == 0);
+    TEST_ASSERT(db.milestone == 42);
+    ldb_close(&db);
+}
+
 TEST_LIST = {
     { "version()",                    test_version },
     { "strerror()",                   test_strerror },
@@ -1269,5 +1295,6 @@ TEST_LIST = {
     { "purge() nothing",              test_purge_nothing },
     { "purge() nominal case",         test_purge_nominal_case },
     { "purge() all",                  test_purge_all },
+    { "update_milestone()",           test_update_milestone },
     { NULL, NULL }
 };
