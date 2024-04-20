@@ -42,6 +42,67 @@ SOFTWARE.
 #include <sys/stat.h>
 #include <sys/time.h>
 
+/**
+ * Logdb is a simple database with the following characteristics:
+ *   - Records have variable length (non-fixed record size)
+ *   - Record identifier is a sequential number
+ *   - Record are indexed by timestamp (monotonic non-decreasing field)
+ *   - Only append function is supported (no update, no delete)
+ *   - Data insertion flush data to disk
+ *   - Automatic data recovery on catastrofic event
+ *   - Records can be read (retrieved by seqnum)
+ *   - Records can be searched by id (seqnum)
+ *   - Records can be searched by timestamp
+ *   - Rollback means to remove X records from top
+ *   - Can be purged (removing X records from bottom)
+ * 
+ * Logdb is intended in the following case:
+ *   - Need to persist sequentially ordered data
+ *   - Most operations are write type
+ *   - Data is rarely read or searched
+ *   - Allows to revert last entries (rollback)
+ *   - Eventually purge obsolete entries (purge)
+ *   - Minimal memory footprint
+ * 
+ * dat file format
+ * ---------------
+ * 
+ * Contains the database data.
+ * 
+ * @see struct ldb_header_dat_t
+ * @see struct ldb_record_dat_t
+ * 
+ *      header      record1        data1       record2        data2
+ * ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐┌─────┴─────┐┌─────┴─────┐...
+ *   magic number   seqnum       raw bytes    seqnum       raw bytes
+ *   format         timestamp                 timestamp
+ *   etc.           lenght                    lenght
+ * 
+ * idx file format
+ * ---------------
+ * 
+ * Used to search database entries.
+ * If idx file does not exist, it is rebuild from the data.
+ * 
+ * @see struct ldb_header_idx_t
+ * @see struct ldb_record_idx_t
+ * 
+ *      header      record1       record2
+ * ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐...
+ *   magic number   seqnum       seqnum
+ *   format         timestamp    timestamp
+ *   etc.           pos          pos
+ * 
+ * We can access directly any record by seqnum because:
+ *  - we know the first seqnum in the db
+ *  - we know the last seqnum in the db
+ *  - idx header has fixed size
+ *  - all idx records have same size
+ *
+ * We use the binary search method over the index records to search data by timestamp.
+ * In all cases we rely on the system file caches to store data in memory.
+ */
+
 #define LDB_VERSION_MAJOR          0
 #define LDB_VERSION_MINOR          1
 #define LDB_VERSION_PATCH          0
