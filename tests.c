@@ -9,7 +9,7 @@
 void test_version(void) {
     const char *version = ldb_version();
     TEST_ASSERT(version != NULL);
-    TEST_CHECK(strcmp(version, "0.1.0") == 0);
+    TEST_CHECK(strcmp(version, "0.2.0") == 0);
 }
 
 void test_strerror(void)
@@ -17,14 +17,20 @@ void test_strerror(void)
     TEST_ASSERT(ldb_strerror(0) == ldb_strerror(LDB_OK));
     TEST_ASSERT(strcmp(ldb_strerror(0), "Success") == 0);
 
+    const char *unknown_error = ldb_strerror(-999);
+    TEST_ASSERT(unknown_error != NULL);
+
     for (int i = 0; i < 20; i++) {
-        TEST_ASSERT(strcmp(ldb_strerror(-i), "Unknow error") != 0);
+        TEST_ASSERT(ldb_strerror(-i) != NULL);
+        TEST_ASSERT(strcmp(ldb_strerror(-i), unknown_error) != 0);
     }
     for (int i = 20; i < 32; i++) {
-        TEST_ASSERT(strcmp(ldb_strerror(-i), "Unknow error") == 0);
+        TEST_ASSERT(ldb_strerror(-i) != NULL);
+        TEST_ASSERT(strcmp(ldb_strerror(-i), unknown_error) == 0);
     }
     for (int i = 1; i < 32; i++) {
-        TEST_ASSERT(strcmp(ldb_strerror(i), "Unknow error") == 0);
+        TEST_ASSERT(ldb_strerror(i) != NULL);
+        TEST_ASSERT(strcmp(ldb_strerror(i), unknown_error) == 0);
     }
 }
 
@@ -39,6 +45,7 @@ void test_get_millis(void)
 void test_is_valid_path(void)
 {
     TEST_ASSERT(ldb_is_valid_path(""));
+    TEST_ASSERT(ldb_is_valid_path("."));
     TEST_ASSERT(ldb_is_valid_path("./"));
     TEST_ASSERT(ldb_is_valid_path("/tmp"));
     TEST_ASSERT(ldb_is_valid_path("/tmp/"));

@@ -20,7 +20,7 @@ Logdb is a simple database with the following characteristics:
 * Record identifier is a sequential number
 * Record are indexed by timestamp (monotonic non-decreasing field)
 * Only append function is supported (no update, no delete)
-* Data insertion flush data to disk
+* Just after insertion data is flushed to disk (no delayed writes)
 * Automatic data recovery on catastrofic event
 * Records can be read (retrieved by seqnum)
 * Records can be searched by id (seqnum)
@@ -35,7 +35,7 @@ Logdb is a simple database with the following characteristics:
 ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐┌─────┴─────┐┌─────┴─────┐...
   magic number   seqnum       raw bytes    seqnum       raw bytes
   format         timestamp                 timestamp
-  etc.           lenght                    lenght
+  etc.           length                    length
 ```
 
 ### idx file format
@@ -61,6 +61,8 @@ TODO
 | Name | Contribution |
 |:-----|:-------------|
 | [Gerard Torrent](https://github.com/torrentg/) | Initial work<br/>Code maintainer|
+| [J_H](https://codereview.stackexchange.com/users/145459/j-h) | [Code review ](https://codereview.stackexchange.com/questions/291660/a-c-header-only-log-structured-database) |
+| [Harith](https://codereview.stackexchange.com/users/265278/harith) | [Code review ](https://codereview.stackexchange.com/questions/291660/a-c-header-only-log-structured-database) |
 
 ## License
 

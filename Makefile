@@ -1,3 +1,4 @@
+# -Wconversion not set because acutest.h and tests.c warnings pollutes output
 CFLAGS= -std=gnu11 -Wall -Wextra -Wpedantic -Wnull-dereference
 
 all: tests coverage cppcheck valgrind
