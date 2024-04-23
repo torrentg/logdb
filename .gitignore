@@ -7,3 +7,4 @@ tests-valgrind
 *.gcno
 coverage/
 .vscode/
+temp/

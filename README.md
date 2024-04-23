@@ -31,11 +31,12 @@ Logdb is a simple database with the following characteristics:
 ### dat file format
 
 ```
-     header      record1        data1       record2        data2
-┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐┌─────┴─────┐┌─────┴─────┐...
-  magic number   seqnum       raw bytes    seqnum       raw bytes
-  format         timestamp                 timestamp
-  etc.           length                    length
+     header       record1          data1          record2       data2
+┌──────┴──────┐┌─────┴─────┐┌────────┴────────┐┌─────┴─────┐┌─────┴─────┐...
+  magic number   seqnum1        raw bytes 1      seqnum2     raw bytes 2
+  format         timestamp1                      timestamp2
+  etc            checksum1                       checksum2
+                 length1                         length2
 ```
 
 ### idx file format
@@ -43,14 +44,14 @@ Logdb is a simple database with the following characteristics:
 ```
      header      record1       record2
 ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐...
-  magic number   seqnum       seqnum
-  format         timestamp    timestamp
-  etc.           pos          pos
+  magic number   seqnum1      seqnum2
+  format         timestamp1   timestamp2
+  etc            pos1         pos2
 ```
 
 ## Usage
 
-Drop off [`logdb.hpp`](logdb.hpp) in your project and start using it.
+Drop off [`logdb.h`](logdb.h) in your project and start using it.
 
 `#define LDB_IMPL`
 
