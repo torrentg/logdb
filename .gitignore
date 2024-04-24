@@ -1,3 +1,4 @@
+*.o
 test.dat
 test.idx
 tests

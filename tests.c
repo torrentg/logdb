@@ -985,13 +985,10 @@ void test_read_empty_db(void)
     entries[1].seqnum = 15;
     entries[2].seqnum = 25;
 
-    TEST_ASSERT(ldb_read(&db, 0, entries, 3, &num) == LDB_OK);
+    TEST_ASSERT(ldb_read(&db, 0, entries, 3, &num) == LDB_ERR_NOT_FOUND);
     TEST_ASSERT(num == 0);
-    TEST_ASSERT(entries[0].seqnum == 0);
-    TEST_ASSERT(entries[1].seqnum == 0);
-    TEST_ASSERT(entries[2].seqnum == 0);
 
-    TEST_ASSERT(ldb_read(&db, 2, entries, 3, &num) == LDB_OK);
+    TEST_ASSERT(ldb_read(&db, 2, entries, 3, &num) == LDB_ERR_NOT_FOUND);
     TEST_ASSERT(num == 0);
 
     ldb_close(&db);
@@ -1009,13 +1006,13 @@ void test_read_nominal_case(void)
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     append_entries(&db, 20, 314);
 
-    TEST_ASSERT(ldb_read(&db, 0, entries, 3, &num) == LDB_OK);
-    TEST_ASSERT(num == 3);
-    TEST_ASSERT(check_entry(&entries[0], 20, "metadata-20", "data-20"));
-    TEST_ASSERT(check_entry(&entries[1], 21, "metadata-21", "data-21"));
-    TEST_ASSERT(check_entry(&entries[2], 22, "metadata-22", "data-22"));
+    TEST_ASSERT(ldb_read(&db, 0, entries, 3, &num) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(num == 0);
 
-    TEST_ASSERT(ldb_read(&db, 1, entries, 3, &num) == LDB_OK);
+    TEST_ASSERT(ldb_read(&db, 10, entries, 3, &num) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(num == 0);
+
+    TEST_ASSERT(ldb_read(&db, 20, entries, 3, &num) == LDB_OK);
     TEST_ASSERT(num == 3);
     TEST_ASSERT(check_entry(&entries[0], 20, "metadata-20", "data-20"));
     TEST_ASSERT(check_entry(&entries[1], 21, "metadata-21", "data-21"));
@@ -1031,7 +1028,7 @@ void test_read_nominal_case(void)
     TEST_ASSERT(check_entry(&entries[0], 313, "metadata-313", "data-313"));
     TEST_ASSERT(check_entry(&entries[1], 314, "metadata-314", "data-314"));
 
-    TEST_ASSERT(ldb_read(&db, 400, entries, 3, &num) == LDB_OK);
+    TEST_ASSERT(ldb_read(&db, 400, entries, 3, &num) == LDB_ERR_NOT_FOUND);
     TEST_ASSERT(num == 0);
 
     ldb_free_entries(entries, 3);
@@ -1306,7 +1303,6 @@ void test_update_milestone(void)
 
     TEST_ASSERT(ldb_update_milestone(NULL, 10) == LDB_ERR);
     TEST_ASSERT(ldb_update_milestone(&db, 10) == LDB_ERR);
-
 
     remove("test.dat");
     remove("test.idx");
