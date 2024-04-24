@@ -40,13 +40,15 @@ void append_entries(ldb_db_t *db, uint64_t seqnum1, uint64_t seqnum2)
 void test_version(void) {
     const char *version = ldb_version();
     TEST_ASSERT(version != NULL);
-    TEST_CHECK(strcmp(version, "0.3.0") == 0);
+    TEST_CHECK(strcmp(version, "0.4.0") == 0);
 }
 
 void test_strerror(void)
 {
+    const char *success = ldb_strerror(LDB_OK);
+
     TEST_ASSERT(ldb_strerror(0) == ldb_strerror(LDB_OK));
-    TEST_ASSERT(strcmp(ldb_strerror(0), "Success") == 0);
+    TEST_ASSERT(strcmp(ldb_strerror(0), success) == 0);
 
     const char *unknown_error = ldb_strerror(-999);
     TEST_ASSERT(unknown_error != NULL);
@@ -61,7 +63,7 @@ void test_strerror(void)
     }
     for (int i = 1; i < 32; i++) {
         TEST_ASSERT(ldb_strerror(i) != NULL);
-        TEST_ASSERT(strcmp(ldb_strerror(i), unknown_error) == 0);
+        TEST_ASSERT(strcmp(ldb_strerror(i), success) == 0);
     }
 }
 
@@ -780,6 +782,25 @@ void test_append_invalid_args(void)
     TEST_ASSERT(ldb_append(&db, &entry, 1, NULL) == LDB_ERR);
 }
 
+void test_append_nothing(void)
+{
+    ldb_db_t db = {0};
+    ldb_entry_t entries[10];
+    size_t num = 0;
+
+    remove("test.dat");
+    remove("test.idx");
+
+    // create empty db
+    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
+
+    // append 0 entries
+    TEST_ASSERT(ldb_append(&db, entries, 0, &num) == LDB_OK);
+    TEST_ASSERT(num == 0);
+
+    ldb_close(&db);
+}
+
 void test_append_auto(void)
 {
     ldb_db_t db = {0};
@@ -908,7 +929,7 @@ void test_append_broken_sequence(void)
         entries[i].data = strdup(buf);
         entries[i].data_len = strlen(buf) + 1;
     }
-    
+
     TEST_ASSERT(ldb_append(&db, entries, len, &num) == LDB_ERR_ENTRY_SEQNUM);
     TEST_ASSERT(num == 5);
     TEST_ASSERT(db.first_seqnum == 10);
@@ -1056,6 +1077,18 @@ void test_stats_nominal_case(void)
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     append_entries(&db, 20, 314);
+
+    TEST_ASSERT(ldb_stats(&db, 10, 15, &stats) == LDB_OK);
+    TEST_ASSERT(stats.min_seqnum == 0);
+    TEST_ASSERT(stats.max_seqnum == 0);
+    TEST_ASSERT(stats.num_entries == 0);
+    TEST_ASSERT(stats.index_size == 0);
+
+    TEST_ASSERT(ldb_stats(&db, 900, 1000, &stats) == LDB_OK);
+    TEST_ASSERT(stats.min_seqnum == 0);
+    TEST_ASSERT(stats.max_seqnum == 0);
+    TEST_ASSERT(stats.num_entries == 0);
+    TEST_ASSERT(stats.index_size == 0);
 
     TEST_ASSERT(ldb_stats(&db, 0, 10000000, &stats) == LDB_OK);
     TEST_ASSERT(stats.min_seqnum == 20);
@@ -1254,6 +1287,8 @@ void test_purge_nothing(void)
 void test_purge_nominal_case(void)
 {
     ldb_db_t db = {0};
+    ldb_entry_t entry = {0};
+    size_t dat_end = 0;
 
     remove("test.dat");
     remove("test.idx");
@@ -1262,10 +1297,14 @@ void test_purge_nominal_case(void)
     append_entries(&db, 20, 314);
     TEST_ASSERT(db.first_seqnum == 20);
     TEST_ASSERT(db.last_seqnum == 314);
+    dat_end = db.dat_end;
 
     TEST_ASSERT(ldb_purge(&db, 100) == 80);
     TEST_ASSERT(db.first_seqnum == 100);
     TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.dat_end < dat_end);
+    TEST_ASSERT(ldb_read(&db, 101, &entry, 1, NULL) == LDB_OK);
+    TEST_ASSERT(entry.seqnum == 101);
     ldb_close(&db);
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
@@ -1351,6 +1390,7 @@ TEST_LIST = {
     { "open() idx check fails (I)",   test_open_idx_check_fails_1 },
     { "open() idx check fails (II)",  test_open_idx_check_fails_2 },
     { "append() invalid args",        test_append_invalid_args },
+    { "append() nothing",             test_append_nothing },
     { "append() auto",                test_append_auto },
     { "append() nominal case",        test_append_nominal_case },
     { "append() broken sequence",     test_append_broken_sequence },

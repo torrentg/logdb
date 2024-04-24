@@ -2,7 +2,7 @@
 
 A simple log-structured database.
 
-It is an header-only C embeded database with no dependencies. 
+It is a header-only C embeded database with no dependencies. 
 The logdb goal is to cover the following case:
 
 * Need to persist sequentially ordered data
@@ -11,6 +11,10 @@ The logdb goal is to cover the following case:
 * Allow to revert last entries (rollback)
 * Eventually purge obsolete entries (purge)
 * Minimal memory footprint
+
+Use cases:
+* Storage engine in a raft library (fault-tolerant distributed applications)
+* Storage engine for journal-based apps
 
 ## Description
 
@@ -53,9 +57,7 @@ Logdb is a simple database with the following characteristics:
 
 Drop off [`logdb.h`](logdb.h) in your project and start using it.
 
-`#define LDB_IMPL`
-
-TODO
+See [`example.c`](example.c).
 
 ## Contributors
 

@@ -100,7 +100,7 @@ SOFTWARE.
  */
 
 #define LDB_VERSION_MAJOR          0
-#define LDB_VERSION_MINOR          3
+#define LDB_VERSION_MINOR          4
 #define LDB_VERSION_PATCH          0
 
 #define LDB_OK                     0
@@ -148,6 +148,7 @@ typedef struct {
     uint64_t last_timestamp;
     size_t dat_end;
     uint32_t format;
+    bool force_fsync;
 } ldb_db_t;
 
 typedef struct {
@@ -499,6 +500,9 @@ uint32_t ldb_crc32(const char *bytes, size_t len, uint32_t checksum)
 
 const char * ldb_strerror(int errnum)
 {
+    if (errnum > 0)
+        return "Success";
+
     switch(errnum)
     {
         case LDB_OK: return "Success";
@@ -806,7 +810,6 @@ static size_t ldb_get_file_size(FILE *fp)
 // Set zero's from pos until the end of the file.
 // Does not update file if already zeroized.
 // Preserve current file position.
-// Flush file.
 // On error return false, otherwise returns true.
 static bool ldb_zeroize(FILE *fp, size_t pos)
 {
@@ -849,9 +852,6 @@ static bool ldb_zeroize(FILE *fp, size_t pos)
     for (; cur_pos < max_pos; cur_pos += sizeof(buf))
         if (fwrite(buf, ldb_min(max_pos - cur_pos, sizeof(buf)), 1, fp) != 1)
             goto LDB_ZEROIZE_END;
-
-    if (fflush(fp) != 0)
-        goto LDB_ZEROIZE_END;
 
     ret = true;
 
@@ -907,9 +907,6 @@ static bool ldb_copy_file(FILE *fp1, size_t pos0, size_t pos1, FILE *fp2, size_t
         if (fwrite(buf, num_bytes, 1, fp2) != 1)
             goto LDB_COPY_FILE_END;
     }
-
-    if (fflush(fp2) != 0)
-        goto LDB_COPY_FILE_END;
 
     ret = true;
 
@@ -1510,20 +1507,15 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         if (record_dat.seqnum != obj->last_seqnum + 1 || record_dat.timestamp < obj->last_timestamp)
             exit_function(LDB_ERR_FMT_DAT);
 
-        pos += sizeof(ldb_record_dat_t) + record_dat.metadata_len + record_dat.data_len;
-
         record_n.seqnum = record_dat.seqnum;
         record_n.timestamp = record_dat.timestamp;
-        record_n.pos += obj->dat_end;
+        record_n.pos = pos;
+
+        pos += sizeof(ldb_record_dat_t) + record_dat.metadata_len + record_dat.data_len;
 
         obj->last_seqnum = record_dat.seqnum;
         obj->last_timestamp = record_dat.timestamp;
-
-        long aux = ftell(obj->dat_fp);
-        if (aux < 0)
-            return LDB_ERR_READ_DAT;
-
-        obj->dat_end = (size_t) aux;
+        obj->dat_end = pos;
 
         if ((ret = ldb_append_record_idx(obj, &record_n)) != LDB_OK)
             goto LDB_OPEN_FILE_IDX_END;
@@ -1644,7 +1636,11 @@ int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
     if (num != NULL)
         *num = 0;
 
+    if (len == 0)
+        return LDB_OK;
+
     size_t i;
+    int fd = 0;
     int ret = LDB_OK;
 
     for (i = 0; i < len; i++)
@@ -1671,8 +1667,23 @@ int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
             (*num)++;
     }
 
-    if (i > 0 && fflush(obj->dat_fp) != 0)
-        ret = LDB_ERR_WRITE_DAT;
+    if (i == 0)
+        return ret;
+
+    if (fflush(obj->dat_fp) != 0)
+        ret = (ret == LDB_OK ? LDB_ERR_WRITE_DAT : ret);
+
+    if (fflush(obj->idx_fp) != 0)
+        ret = (ret == LDB_OK ? LDB_ERR_WRITE_IDX : ret);
+
+    if (obj->force_fsync)
+    {
+        if ((fd = fileno(obj->dat_fp)) == -1)
+            ret = (ret == LDB_OK ? LDB_ERR_WRITE_DAT : ret);
+
+        if ((fd = fdatasync(fd)) == -1)
+            ret = (ret == LDB_OK ? LDB_ERR_WRITE_DAT : ret);
+    }
 
     return ret;
 }
@@ -1729,7 +1740,7 @@ int ldb_stats(ldb_db_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *st
 
     memset(stats, 0x00, sizeof(ldb_stats_t));
 
-    if (obj->first_seqnum == 0) {
+    if (obj->first_seqnum == 0 || seqnum2 < obj->first_seqnum || obj->last_seqnum < seqnum1) {
         return LDB_OK;
     }
 
@@ -2004,7 +2015,7 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
     if ((ret = ldb_open_file_dat(obj, false)) != LDB_OK)
         goto LDB_PURGE_END;
 
-    if (( ret = ldb_open_file_idx(obj, false)) != LDB_OK)
+    if ((ret = ldb_open_file_idx(obj, false)) != LDB_OK)
         goto LDB_PURGE_END;
 
     free(tmp_path);

@@ -1,11 +1,15 @@
 # -Wconversion not set because acutest.h and tests.c warnings pollutes output
 CFLAGS= -std=gnu11 -Wall -Wextra -Wpedantic -Wnull-dereference
 
-all: tests coverage cppcheck valgrind
+all: tests coverage cppcheck valgrind example
 
 tests: logdb.h tests.c
 	$(CC) -g $(CFLAGS) -o tests tests.c
 	./tests
+
+example: logdb.h example.c
+	$(CC) -g $(CFLAGS) -o example example.c
+	./example
 
 coverage: logdb.h tests.c
 	$(CC) --coverage -O0 $(CFLAGS) -o tests-coverage tests.c -lgcov
@@ -23,6 +27,7 @@ valgrind: logdb.h tests.c
 
 clean: 
 	rm -f tests test.dat test.idx test.tmp
+	rm -f example example.dat example.idx example.tmp
 	rm -f tests-coverage
 	rm -f tests-valgrind
 	rm -f *.gcda *.gcno
