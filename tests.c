@@ -1311,6 +1311,8 @@ void test_purge_nominal_case(void)
     TEST_ASSERT(db.first_seqnum == 100);
     TEST_ASSERT(db.last_seqnum == 314);
     ldb_close(&db);
+
+    ldb_free_entry(&entry);
 }
 
 void test_purge_all(void)

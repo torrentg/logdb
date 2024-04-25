@@ -15,16 +15,15 @@ static const char lorem[] =
     "occaecat cupidatat non proident, sunt in culpa qui officia " \
     "deserunt mollit anim id est laborum.";
 
-void print_result(const char *fmt, int rc, ...)
-{
-    char buf[1024] = {0};
-    va_list args;
-
-    va_start(args, rc);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    printf("%-65s: %s\n", buf, ldb_strerror(rc));
+ldb_entry_t create_random_entry(size_t seqnum, size_t timestamp) {
+    return (ldb_entry_t) {
+        .seqnum = seqnum,
+        .timestamp = timestamp,
+        .metadata = (char *) lorem + (rand() % (sizeof(lorem) - 11)),
+        .metadata_len = 10,
+        .data = (char *) lorem + (rand() % (sizeof(lorem) - 21)),
+        .data_len = 20
+    };
 }
 
 void print_entry(const char *prefix, const ldb_entry_t *entry) {
@@ -35,15 +34,16 @@ void print_entry(const char *prefix, const ldb_entry_t *entry) {
             entry->data_len, entry->data);
 }
 
-ldb_entry_t create_random_entry(size_t seqnum, size_t timestamp) {
-    return (ldb_entry_t) {
-        .seqnum = seqnum,
-        .timestamp = timestamp,
-        .metadata = (char *) lorem + (rand() % (sizeof(lorem) - 11)),
-        .metadata_len = 10,
-        .data = (char *) lorem + (rand() % (sizeof(lorem) - 21)),
-        .data_len = 20
-    };
+void print_result(const char *fmt, int rc, ...)
+{
+    char buf[1024] = {0};
+    va_list args;
+
+    va_start(args, rc);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    printf("%-65s: %s\n", buf, ldb_strerror(rc));
 }
 
 int main(void)
