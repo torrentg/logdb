@@ -281,7 +281,6 @@ void test_open_invl_dat_header(void)
 void test_open_and_repair_1(void)
 {
     ldb_db_t db = {0};
-    const char garbage[] = "ioscm,nswddljkh";
     ldb_record_dat_t record = {0};
 
     remove("test.dat");
@@ -291,7 +290,8 @@ void test_open_and_repair_1(void)
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
 
     // writing invalid data (first record too short)
-    fwrite(garbage, 4, 1, db.dat_fp);
+    const char garbage[] = "ioscm,nswddljkh";
+    fwrite(garbage, sizeof(garbage), 1, db.dat_fp);
     ldb_close(&db);
 
     // incomplete record is zeroized
@@ -349,8 +349,8 @@ void test_open_and_repair_2(void)
     fwrite(&record, sizeof(ldb_record_dat_t), 1, db.dat_fp);
 
     // inserting garbage
-    const char garbage[] = "ioscm,nswddljkh";
-    fwrite(&garbage, 10, 1, db.dat_fp);
+    const char garbage[] = "ioscm,nswddljk";
+    fwrite(&garbage, sizeof(garbage), 1, db.dat_fp);
     ldb_close(&db);
 
     // incomplete record is zeroized
@@ -1062,8 +1062,8 @@ void test_stats_invalid_args(void)
     ldb_stats_t stats = {0};
 
     TEST_ASSERT(ldb_stats(NULL, 1, 1000, &stats) == LDB_ERR);
-    TEST_ASSERT(ldb_stats(&db, 1, 1000, NULL) == LDB_ERR);
-    TEST_ASSERT(ldb_stats(&db, 99, 1, &stats) == LDB_ERR);
+    TEST_ASSERT(ldb_stats(&db, 1, 1000, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_stats(&db, 99, 1, &stats) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_stats(&db, 1, 1000, &stats) == LDB_ERR);
 }
 

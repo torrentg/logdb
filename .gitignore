@@ -1,9 +1,10 @@
 *.o
-test.dat
-test.idx
+*.dat
+*.idx
 tests
 tests-coverage
 tests-valgrind
+example
 *.gcda
 *.gcno
 coverage/

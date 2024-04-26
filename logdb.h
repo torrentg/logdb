@@ -97,6 +97,23 @@ SOFTWARE.
  *
  * We use the binary search method over the index records to search data by timestamp.
  * In all cases we rely on the system file caches to store data in memory.
+ * 
+ * Concurrency
+ * ---------------
+ * 
+ * Thread        Function      Mutex    Info
+ * -------------------------------------------------------------------
+ *               ┌ open()         -     Init mutex, create FILE's used to write and fd's used to read
+ *               ├ append()       -     A unique flush on dat and idx files is done at the end. Last seqnum is updated after this flush.
+ * thread-write: ┼ rollback()     X     Exclusive lock (to avoid concurrent read)
+ *               ├ purge()        X     Exclusive lock (to avoid concurrent read)
+ *               └ close()        X     Exclusive lock (to avoid concurrent read)
+ *               ┌ stats()        X     Exclusive lock (to avoid concurrent destructive write)
+ * thread-read:  ┼ read()         X     Exclusive lock (to avoid concurrent destructive write)
+ *               └ search()       X     Exclusive lock (to avoid concurrent destructive write)
+ * 
+ * Mutex grants that destructive write-ops don't collide with read-ops.
+ * File descriptors used to read are duplicates (dup) of the files used to write.
  */
 
 #define LDB_VERSION_MAJOR          0
@@ -130,17 +147,19 @@ extern "C" {
 #endif
 
 typedef enum {
-    LDB_SEARCH_LOWER,        // Search first entry having timestamp not less than value.
-    LDB_SEARCH_UPPER         // Search first entry having timestamp greater than value.
+    LDB_SEARCH_LOWER,           // Search first entry having timestamp not less than value.
+    LDB_SEARCH_UPPER            // Search first entry having timestamp greater than value.
 } ldb_search_e;
 
 typedef struct {
-    char *name;
-    char *path;
-    char *dat_path;
-    FILE *dat_fp;
-    char *idx_path;
-    FILE *idx_fp;
+    char *name;                 // Database name
+    char *path;                 // Directory where files are located
+    char *dat_path;             // Data filepath (path + filename)
+    char *idx_path;             // Index filepath (path + filename)
+    FILE *dat_fp;               // Data file pointer (used to write)
+    FILE *idx_fp;               // Index file pointer (used to write)
+    int   dat_fd;               // Data file descriptor (used to read)
+    int   idx_fd;               // Index file descriptor (used to read)
     uint64_t milestone;
     uint64_t first_seqnum;
     uint64_t first_timestamp;
@@ -559,7 +578,9 @@ LDB_INLINE
 static bool ldb_is_valid_db(ldb_db_t *obj) {
     return (obj &&
             obj->dat_fp && !feof(obj->dat_fp) && !ferror(obj->dat_fp) &&
-            obj->idx_fp && !feof(obj->idx_fp) && !ferror(obj->idx_fp));
+            obj->idx_fp && !feof(obj->idx_fp) && !ferror(obj->idx_fp) &&
+            obj->dat_fd > STDERR_FILENO && 
+            obj->idx_fd > STDERR_FILENO);
 }
 
 static int ldb_close_files(ldb_db_t *obj)
@@ -572,11 +593,19 @@ static int ldb_close_files(ldb_db_t *obj)
     if (obj->idx_fp != NULL && fclose(obj->idx_fp) != 0)
         ret = LDB_ERR_WRITE_IDX;
 
+    if (obj->idx_fd > STDERR_FILENO && close(obj->idx_fd) == -1)
+        ret = LDB_ERR_WRITE_IDX;
+
     if (obj->dat_fp != NULL && fclose(obj->dat_fp) != 0)
+        ret = LDB_ERR_WRITE_DAT;
+
+    if (obj->dat_fd > STDERR_FILENO && close(obj->dat_fd) == -1)
         ret = LDB_ERR_WRITE_DAT;
 
     obj->dat_fp = NULL;
     obj->idx_fp = NULL;
+    obj->dat_fd = -1;
+    obj->idx_fd = -1;
     obj->first_seqnum = 0;
     obj->first_timestamp = 0;
     obj->last_seqnum = 0;
@@ -918,6 +947,17 @@ LDB_COPY_FILE_END:
     return ret;
 }
 
+// returns the position in the idx of the seqnum entry
+static size_t ldb_get_pos_idx(ldb_db_t *obj, uint64_t seqnum)
+{
+    assert(obj);
+    assert(obj->first_seqnum <= seqnum);
+    assert(seqnum <= obj->last_seqnum);
+
+    size_t diff = (obj->first_seqnum == 0 ? 0 : seqnum - obj->first_seqnum);
+    return sizeof(ldb_header_idx_t) + diff * sizeof(ldb_record_idx_t);
+}
+
 static uint32_t ldb_checksum_record(ldb_record_dat_t *record)
 {
     uint32_t checksum = 0;
@@ -1011,109 +1051,6 @@ static int ldb_append_entry_dat(ldb_db_t *obj, ldb_entry_t *entry)
     return LDB_OK;
 }
 
-// Read record at pos.
-// Let file positioned at the end of record if checksum not verified, 
-// or at the data end if checksum verified
-static int ldb_read_record_dat(ldb_db_t *obj, size_t pos, ldb_record_dat_t *record, bool verify_checksum)
-{
-    assert(obj);
-    assert(record);
-    assert(obj->dat_fp);
-    assert(!feof(obj->dat_fp));
-    assert(!ferror(obj->dat_fp));
-
-    if (fseek(obj->dat_fp, (long) pos, SEEK_SET) != 0)
-        return LDB_ERR_READ_DAT;
-
-    if (fread(record, sizeof(ldb_record_dat_t), 1, obj->dat_fp) != 1)
-        return LDB_ERR_READ_DAT;
-
-    if (!verify_checksum || record->seqnum == 0)
-        return LDB_OK;
-
-    uint32_t checksum = ldb_checksum_record(record);
-    size_t len = record->metadata_len + record->data_len;
-
-    if (len > 0)
-    {
-        char buf[BUFSIZ] = {0};
-
-        pos += sizeof(ldb_record_dat_t);
-
-        for (size_t i = pos; i < pos + len; i += sizeof(buf))
-        {
-            size_t num_bytes = ldb_min(pos + len - i, sizeof(buf));
-
-            if (fread(buf, 1, num_bytes, obj->dat_fp) != num_bytes) {
-                if (feof(obj->dat_fp)) {
-                    clearerr(obj->dat_fp);
-                    return LDB_ERR_FMT_DAT;
-                } else {
-                    return LDB_ERR_READ_DAT;
-                }
-            }
-
-            checksum = ldb_crc32(buf, num_bytes, checksum);
-        }
-    }
-
-    if (checksum != record->checksum)
-        return LDB_ERR_CHECKSUM;
-
-    return LDB_OK;
-}
-
-static int ldb_read_entry_dat(ldb_db_t *obj, size_t pos, ldb_entry_t *entry)
-{
-    assert(obj);
-    assert(entry);
-    assert(obj->dat_fp);
-    assert(!feof(obj->dat_fp));
-    assert(!ferror(obj->dat_fp));
-
-    int rc = 0;
-    ldb_record_dat_t record = {0};
-
-    if ((rc = ldb_read_record_dat(obj, pos, &record, false)) != LDB_OK)
-        return rc;
-
-    if (record.seqnum < obj->first_seqnum || obj->last_seqnum < record.seqnum)
-        return LDB_ERR;
-
-    if (!ldb_alloc_entry(entry, record.metadata_len, record.data_len))
-        return LDB_ERR_MEM;
-
-    if (record.metadata_len) {
-        assert(entry->metadata != NULL);
-        if (fread(entry->metadata, record.metadata_len, 1, obj->dat_fp) != 1)
-            return LDB_ERR_READ_DAT;
-    }
-
-    if (record.data_len) {
-        assert(entry->data != NULL);
-        if (fread(entry->data, record.data_len, 1, obj->dat_fp) != 1)
-            return LDB_ERR_READ_DAT;
-    }
-
-    entry->seqnum = record.seqnum;
-    entry->timestamp = record.timestamp;
-
-    if (record.checksum != ldb_checksum_entry(entry))
-        return LDB_ERR_CHECKSUM;
-
-    return LDB_OK;
-}
-
-static size_t ldb_get_pos_idx(ldb_db_t *obj, uint64_t seqnum)
-{
-    assert(obj);
-    assert(obj->first_seqnum <= seqnum);
-    assert(seqnum <= obj->last_seqnum);
-
-    size_t diff = (obj->first_seqnum == 0 ? 0 : seqnum - obj->first_seqnum);
-    return sizeof(ldb_header_idx_t) + diff * sizeof(ldb_record_idx_t);
-}
-
 static int ldb_append_record_idx(ldb_db_t *obj, ldb_record_idx_t *record)
 {
     assert(obj);
@@ -1138,11 +1075,116 @@ static int ldb_append_record_idx(ldb_db_t *obj, ldb_record_idx_t *record)
     return LDB_OK;
 }
 
+// Read data record at pos.
+// Let file positioned at the end of record if checksum not verified, 
+// or at the data end if checksum verified
+static int ldb_read_record_dat(ldb_db_t *obj, size_t pos, ldb_record_dat_t *record, bool verify_checksum)
+{
+    assert(obj);
+    assert(record);
+    assert(obj->dat_fd > STDERR_FILENO);
+
+    if (lseek(obj->dat_fd, (off_t) pos, SEEK_SET) != (off_t) pos)
+        return LDB_ERR_READ_DAT;
+
+    ssize_t rc = read(obj->dat_fd, record, sizeof(ldb_record_dat_t));
+
+    if (rc == -1)
+        return LDB_ERR_READ_DAT;
+
+    if (rc != sizeof(ldb_record_dat_t))
+        return LDB_ERR_FMT_DAT;
+
+    if (!verify_checksum || record->seqnum == 0)
+        return LDB_OK;
+
+    uint32_t checksum = ldb_checksum_record(record);
+    size_t len = record->metadata_len + record->data_len;
+
+    if (len > 0)
+    {
+        char buf[BUFSIZ] = {0};
+
+        pos += sizeof(ldb_record_dat_t);
+
+        for (size_t i = pos; i < pos + len; i += sizeof(buf))
+        {
+            size_t num_bytes = ldb_min(pos + len - i, sizeof(buf));
+
+            rc = read(obj->dat_fd, buf, num_bytes);
+
+            if (rc == -1)
+                return LDB_ERR_READ_DAT;
+            
+            if (rc != (ssize_t) num_bytes)
+                return LDB_ERR_FMT_DAT;
+
+            checksum = ldb_crc32(buf, num_bytes, checksum);
+        }
+    }
+
+    if (checksum != record->checksum)
+        return LDB_ERR_CHECKSUM;
+
+    return LDB_OK;
+}
+
+static int ldb_read_entry_dat(ldb_db_t *obj, size_t pos, ldb_entry_t *entry)
+{
+    assert(obj);
+    assert(entry);
+    assert(obj->dat_fd > STDERR_FILENO);
+
+    int ret = 0;
+    ssize_t rc = 0;
+    ldb_record_dat_t record = {0};
+
+    if ((ret = ldb_read_record_dat(obj, pos, &record, false)) != LDB_OK)
+        return ret;
+
+    if (record.seqnum < obj->first_seqnum || obj->last_seqnum < record.seqnum)
+        return LDB_ERR;
+
+    if (!ldb_alloc_entry(entry, record.metadata_len, record.data_len))
+        return LDB_ERR_MEM;
+
+    if (record.metadata_len)
+    {
+        assert(entry->metadata != NULL);
+        rc = read(obj->dat_fd, entry->metadata, record.metadata_len);
+        if (rc == -1)
+            return LDB_ERR_READ_DAT;
+        if (rc != (ssize_t) record.metadata_len)
+            return LDB_ERR_FMT_DAT;
+    }
+
+    if (record.data_len)
+    {
+        assert(entry->data != NULL);
+        rc = read(obj->dat_fd, entry->data, record.data_len);
+        if (rc == -1)
+            return LDB_ERR_READ_DAT;
+        if (rc != (ssize_t) record.data_len)
+            return LDB_ERR_FMT_DAT;
+    }
+
+    entry->seqnum = record.seqnum;
+    entry->timestamp = record.timestamp;
+
+    if (record.checksum != ldb_checksum_entry(entry))
+        return LDB_ERR_CHECKSUM;
+
+    return LDB_OK;
+}
+
 static int ldb_read_record_idx(ldb_db_t *obj, uint64_t seqnum, ldb_record_idx_t *record)
 {
     assert(obj);
     assert(record);
-    assert(seqnum > 0);
+    assert(obj->dat_fd > STDERR_FILENO);
+
+    if (obj->first_seqnum == 0 || seqnum < obj->first_seqnum || obj->last_seqnum < seqnum)
+        return LDB_ERR;
 
     if (seqnum == obj->first_seqnum) {
         record->seqnum = obj->first_seqnum;
@@ -1151,15 +1193,12 @@ static int ldb_read_record_idx(ldb_db_t *obj, uint64_t seqnum, ldb_record_idx_t 
         return LDB_OK;
     }
 
-    if (obj->first_seqnum == 0 || seqnum < obj->first_seqnum || obj->last_seqnum < seqnum)
-        return LDB_ERR;
-
     size_t pos = ldb_get_pos_idx(obj, seqnum);
 
-    if (fseek(obj->idx_fp, (long) pos, SEEK_SET) != 0)
+    if (lseek(obj->idx_fd, (off_t) pos, SEEK_SET) != (off_t) pos)
         return LDB_ERR_READ_IDX;
 
-    if (fread(record, sizeof(ldb_record_idx_t), 1, obj->idx_fp) != 1)
+    if (read(obj->idx_fd, record, sizeof(ldb_record_idx_t)) != sizeof(ldb_record_idx_t))
         return LDB_ERR_READ_IDX;
 
     if (record->seqnum != seqnum)
@@ -1173,22 +1212,27 @@ static int ldb_read_record_idx(ldb_db_t *obj, uint64_t seqnum, ldb_record_idx_t 
 /**
  * pre-conditions:
  *   - obj->dat_fp == NULL
+ *   - obj->dat_fd == -1
  *   - obj->idx_fp == NULL
+ *   - obj->idx_fd == -1
  *
  * post-conditions (OK)
  *   - obj->dat_fp = set
+ *   - obj->dat_fd = set
  *   - obj->format = set
  *   - obj->first_seqnum = set (0 if no data)
  *   - obj->first_timestamp = set
  * 
  * post-conditions (KO)
- *   - obj->dat_fp = NULL
+ *   - dat files closed
  */
 static int ldb_open_file_dat(ldb_db_t *obj, bool check)
 {
     assert(obj);
     assert(obj->dat_fp == NULL);
     assert(obj->idx_fp == NULL);
+    assert(obj->dat_fd == -1);
+    assert(obj->idx_fd == -1);
 
     int ret = LDB_OK;
     ldb_header_dat_t header = {0};
@@ -1207,9 +1251,20 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
     if (obj->dat_fp == NULL)
         return LDB_ERR_OPEN_DAT;
 
+    if ((obj->dat_fd = dup(fileno(obj->dat_fp))) == -1)
+        return LDB_ERR_OPEN_DAT;
+
+    assert(obj->dat_fd > STDERR_FILENO);
+
     len = ldb_get_file_size(obj->dat_fp);
 
-    if (fread(&header, sizeof(ldb_header_dat_t), 1, obj->dat_fp) != 1)
+    if (fseek(obj->dat_fp, 0, SEEK_END) == -1)
+        exit_function(LDB_ERR_OPEN_DAT);
+
+    if (lseek(obj->dat_fd, 0, SEEK_SET) != 0)
+        exit_function(LDB_ERR_OPEN_DAT);
+
+    if (read(obj->dat_fd, &header, sizeof(ldb_header_dat_t)) != sizeof(ldb_header_dat_t))
         exit_function(LDB_ERR_FMT_DAT);
 
     pos += sizeof(ldb_header_dat_t);
@@ -1294,15 +1349,19 @@ LDB_OPEN_FILE_DAT_END:
 
 /**
  * pre-conditions:
- *   - obj->dat_fp != NULL
+ *   - obj->dat_fp = set
+ *   - obj->dat_fd = set
  *   - obj->idx_fp == NULL
+ *   - obj->idx_fd == -1
  *   - obj->first_seqnum = set (0 if no data)
  *   - obj->first_timestamp = set
  *   - obj->format = set
  *
  * post-conditions (OK)
  *   - obj->dat_fp = set
+ *   - obj->dat_fd = set
  *   - obj->idx_fp = set
+ *   - obj->dat_fd = set
  *   - obj->first_seqnum = set (0 if no data)
  *   - obj->first_timestamp = set
  *   - obj->last_seqnum = set (0 if no data)
@@ -1310,14 +1369,16 @@ LDB_OPEN_FILE_DAT_END:
  *   - obj->dat_end = set
  * 
  * post-conditions (KO)
- *   - obj->idx_fp = NULL
+ *   - idx files closed
  */
 static int ldb_open_file_idx(ldb_db_t *obj, bool check)
 {
     assert(obj);
     assert(obj->idx_fp == NULL);
+    assert(obj->idx_fd == -1);
     assert(obj->dat_fp != NULL);
-    assert(!ferror(obj->dat_fp));
+    assert(obj->dat_fd > STDERR_FILENO);
+    assert(!ferror(obj->dat_fp) && !feof(obj->dat_fp));
 
     int ret = LDB_OK;
     ldb_header_idx_t header = {0};
@@ -1331,9 +1392,20 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     if (obj->idx_fp == NULL)
         return LDB_ERR_OPEN_IDX;
 
+    if ((obj->idx_fd = dup(fileno(obj->idx_fp))) == -1)
+        return LDB_ERR_OPEN_IDX;
+
+    assert(obj->idx_fd > STDERR_FILENO);
+
     len = ldb_get_file_size(obj->idx_fp);
 
-    if (fread(&header, sizeof(ldb_header_idx_t), 1, obj->idx_fp) != 1)
+    if (fseek(obj->idx_fp, 0, SEEK_END) == -1)
+        exit_function(LDB_ERR_OPEN_IDX);
+
+    if (lseek(obj->idx_fd, 0, SEEK_SET) != 0)
+        return LDB_ERR_OPEN_IDX;
+
+    if (read(obj->idx_fd, &header, sizeof(ldb_header_idx_t)) != sizeof(ldb_header_idx_t))
         exit_function(LDB_ERR_FMT_IDX);
 
     pos += sizeof(ldb_header_idx_t);
@@ -1350,7 +1422,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     if (pos + sizeof(ldb_record_idx_t) <= len)
     {
         // read first entry
-        if (fread(&record_0, sizeof(ldb_record_idx_t), 1, obj->idx_fp) != 1) 
+        if (read(obj->idx_fd, &record_0, sizeof(ldb_record_idx_t)) != sizeof(ldb_record_idx_t)) 
             exit_function(LDB_ERR_READ_IDX);
 
         pos += sizeof(ldb_record_idx_t);
@@ -1379,7 +1451,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
 
         while (pos + sizeof(ldb_record_idx_t) <= len)
         {
-            if (fread(&aux, sizeof(ldb_record_idx_t), 1, obj->idx_fp) != 1) 
+            if (read(obj->idx_fd, &aux, sizeof(ldb_record_idx_t)) != sizeof(ldb_record_idx_t)) 
                 exit_function(LDB_ERR_READ_IDX);
 
             if (aux.seqnum == 0)
@@ -1390,7 +1462,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
             if (aux.seqnum != record_n.seqnum + 1 || aux.timestamp < record_n.timestamp || aux.pos < record_n.pos + sizeof(ldb_record_dat_t))
                 exit_function(LDB_ERR_FMT_IDX);
 
-            if ((ret = ldb_read_record_dat(obj, aux.pos, &record_dat, true)) != LDB_OK)
+            if (ldb_read_record_dat(obj, aux.pos, &record_dat, true) != LDB_OK)
                 exit_function(LDB_ERR_FMT_IDX);
 
             if (aux.seqnum != record_dat.seqnum || aux.timestamp != record_dat.timestamp)
@@ -1404,18 +1476,20 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         // search last valid position
         long rem = ((long) len - (long) sizeof(ldb_header_idx_t)) % (int) sizeof(ldb_record_idx_t);
 
-        if (fseek(obj->idx_fp, -rem, SEEK_END) != 0)
-            exit_function(LDB_ERR_READ_IDX);
-
         pos = len - (size_t)(rem);
+
+        if (lseek(obj->idx_fd, (off_t) -rem, SEEK_END) != (off_t) pos)
+            exit_function(LDB_ERR_READ_IDX);
 
         // move backwards until last record distinct than 0 (not rolled back)
         while (pos > sizeof(ldb_header_idx_t))
         {
-            if (fseek(obj->idx_fp, (long)(pos - sizeof(ldb_record_idx_t)), SEEK_SET) != 0)
+            off_t new_pos = (off_t)(pos - sizeof(ldb_record_idx_t));
+
+            if (lseek(obj->idx_fd, new_pos, SEEK_SET) != new_pos)
                 exit_function(LDB_ERR_READ_IDX);
 
-            if (fread(&record_n, sizeof(ldb_record_idx_t), 1, obj->idx_fp) != 1) 
+            if (read(obj->idx_fd, &record_n, sizeof(ldb_record_idx_t)) != sizeof(ldb_record_idx_t)) 
                 exit_function(LDB_ERR_READ_IDX);
 
             if (record_n.seqnum != 0)
@@ -1426,7 +1500,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     }
 
     // at this point pos is just after the last record distinct than 0
-    if (fseek(obj->idx_fp, (long) pos, SEEK_SET) != 0)
+    if (lseek(obj->idx_fd, (off_t) pos, SEEK_SET) != (off_t) pos)
         exit_function(LDB_ERR_READ_IDX);
 
     if (!ldb_zeroize(obj->idx_fp, pos))
@@ -1462,7 +1536,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         if (pos != sizeof(ldb_header_idx_t) + (diff + 1) * sizeof(ldb_record_idx_t))
             exit_function(LDB_ERR_FMT_IDX);
 
-        if (record_n.pos < sizeof(ldb_header_dat_t) + (diff + 1) * sizeof(ldb_record_dat_t))
+        if (record_n.pos < sizeof(ldb_header_dat_t) + diff * sizeof(ldb_record_dat_t))
             exit_function(LDB_ERR_FMT_IDX);
 
         obj->last_seqnum = record_n.seqnum;
@@ -1481,7 +1555,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     pos = record_n.pos;
     len = ldb_get_file_size(obj->dat_fp);
 
-    if ((ret = ldb_read_record_dat(obj, pos, &record_dat, true)) != LDB_OK)
+    if (ldb_read_record_dat(obj, pos, &record_dat, true) != LDB_OK)
         exit_function(LDB_ERR_FMT_IDX);
 
     if (record_dat.seqnum != record_n.seqnum || record_dat.timestamp != record_n.timestamp)
@@ -1529,8 +1603,10 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     return LDB_OK;
 
 LDB_OPEN_FILE_IDX_END:
-    fclose(obj->idx_fp);
+    if (obj->idx_fp != NULL) fclose(obj->idx_fp);
+    if (obj->idx_fd > STDERR_FILENO) close(obj->idx_fd);
     obj->idx_fp = NULL;
+    obj->idx_fd = -1;
     return ret;
 }
 
@@ -1570,6 +1646,8 @@ int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
     obj->dat_path = ldb_create_filename(path, name, LDB_EXT_DAT);
     obj->idx_path = ldb_create_filename(path, name, LDB_EXT_IDX);
     obj->dat_end = sizeof(ldb_header_dat_t);
+    obj->dat_fd = -1;
+    obj->idx_fd = -1;
 
     if (!obj->name || !obj->path || !obj->dat_path || !obj->idx_path)
         exit_function(LDB_ERR_MEM);
@@ -1583,26 +1661,35 @@ int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
             exit_function(LDB_ERR_OPEN_DAT);
     }
 
-    // case dat file not exist
+    // case idx file not exist
     if (access(obj->idx_path, F_OK) != 0)
     {
         if (!ldb_create_file_idx(obj->idx_path))
             exit_function(LDB_ERR_OPEN_IDX);
     }
 
+    // open data file
     if ((ret = ldb_open_file_dat(obj, check)) != LDB_OK)
         goto LDB_OPEN_END;
 
+    // open index file
     ret = ldb_open_file_idx(obj, check);
-    if (ret == LDB_ERR_READ_IDX || ret == LDB_ERR_WRITE_IDX || ret == LDB_ERR_FMT_IDX)
+    switch(ret)
     {
-        // try to rebuild the index file
-        remove(obj->idx_path);
-
-        if (!ldb_create_file_idx(obj->idx_path))
-            exit_function(LDB_ERR_OPEN_IDX);
-
-        if ((ret = ldb_open_file_idx(obj, check)) != LDB_OK)
+        case LDB_OK:
+            break;
+        case LDB_ERR_OPEN_IDX:
+        case LDB_ERR_READ_IDX:
+        case LDB_ERR_WRITE_IDX:
+        case LDB_ERR_FMT_IDX:
+            // try to rebuild the index file
+            remove(obj->idx_path);
+            if (!ldb_create_file_idx(obj->idx_path))
+                exit_function(LDB_ERR_OPEN_IDX);
+            if ((ret = ldb_open_file_idx(obj, true)) != LDB_OK)
+                goto LDB_OPEN_END;
+            break;
+        default:
             goto LDB_OPEN_END;
     }
 
@@ -1610,6 +1697,8 @@ int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
     assert(!feof(obj->idx_fp));
     assert(!ferror(obj->dat_fp));
     assert(!ferror(obj->idx_fp));
+    assert(obj->dat_fd > STDERR_FILENO);
+    assert(obj->idx_fd > STDERR_FILENO);
 
     return LDB_OK;
 
@@ -1640,7 +1729,6 @@ int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
         return LDB_OK;
 
     size_t i;
-    int fd = 0;
     int ret = LDB_OK;
 
     for (i = 0; i < len; i++)
@@ -1678,10 +1766,7 @@ int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
 
     if (obj->force_fsync)
     {
-        if ((fd = fileno(obj->dat_fp)) == -1)
-            ret = (ret == LDB_OK ? LDB_ERR_WRITE_DAT : ret);
-
-        if ((fd = fdatasync(fd)) == -1)
+        if (fdatasync(fileno(obj->dat_fp)) == -1)
             ret = (ret == LDB_OK ? LDB_ERR_WRITE_DAT : ret);
     }
 
@@ -1732,11 +1817,11 @@ int ldb_read(ldb_db_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t len, s
 
 int ldb_stats(ldb_db_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats)
 {
-    if (!ldb_is_valid_db(obj))
-        return LDB_ERR;
-
     if (seqnum2 < seqnum1 || stats == NULL)
         return LDB_ERR_ARG;
+
+    if (!ldb_is_valid_db(obj))
+        return LDB_ERR;
 
     memset(stats, 0x00, sizeof(ldb_stats_t));
 
@@ -2009,6 +2094,9 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
     if (rename(tmp_path, obj->dat_path) != 0)
         exit_function(LDB_ERR_TMP_FILE);
 
+    free(tmp_path);
+    tmp_path = NULL;
+
     if (!ldb_create_file_idx(obj->idx_path))
         exit_function(LDB_ERR_OPEN_IDX);
 
@@ -2018,7 +2106,6 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
     if ((ret = ldb_open_file_idx(obj, false)) != LDB_OK)
         goto LDB_PURGE_END;
 
-    free(tmp_path);
     return removed_entries;
 
 LDB_PURGE_END:
