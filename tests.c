@@ -40,7 +40,7 @@ void append_entries(ldb_db_t *db, uint64_t seqnum1, uint64_t seqnum2)
 void test_version(void) {
     const char *version = ldb_version();
     TEST_ASSERT(version != NULL);
-    TEST_CHECK(strcmp(version, "0.4.0") == 0);
+    TEST_CHECK(strcmp(version, "0.5.0") == 0);
 }
 
 void test_strerror(void)
@@ -743,12 +743,18 @@ void test_alloc_free_entry(void)
     TEST_ASSERT(entry.data == entry.metadata);
     ptr = entry.metadata;
 
-    TEST_ASSERT(ldb_alloc_entry(&entry, 2, 50));
+    // used to 'force' an allocation just after the previous one
+    // avoiding a realloc was done in the same place
+    char *aux = calloc(1000,1);
+
+    TEST_ASSERT(ldb_alloc_entry(&entry, 2, 5000));
     TEST_ASSERT(entry.metadata_len == 2);
-    TEST_ASSERT(entry.data_len == 50);
-    TEST_ASSERT(entry.metadata != ptr);
+    TEST_ASSERT(entry.data_len == 5000);
+    TEST_ASSERT(entry.metadata != ptr); // this test can fail if mem is reallocated in the same place
     TEST_ASSERT(entry.data == entry.metadata + sizeof(void*));
     ldb_free_entry(&entry);
+
+    free(aux);
 }
 
 void test_alloc_free_entries(void)
@@ -987,8 +993,8 @@ void test_read_invalid_args(void)
     ldb_db_t db = {0};
     ldb_entry_t entries[3] = {0};
 
-    TEST_ASSERT(ldb_read(NULL, 1, entries, 3, NULL) == LDB_ERR);
-    TEST_ASSERT(ldb_read(&db, 1, NULL, 3, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_read(NULL, 1, entries, 3, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_read(&db, 1, NULL, 3, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_read(&db, 1, entries, 3, NULL) == LDB_ERR);
 }
 
@@ -1061,7 +1067,7 @@ void test_stats_invalid_args(void)
     ldb_db_t db = {0};
     ldb_stats_t stats = {0};
 
-    TEST_ASSERT(ldb_stats(NULL, 1, 1000, &stats) == LDB_ERR);
+    TEST_ASSERT(ldb_stats(NULL, 1, 1000, &stats) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_stats(&db, 1, 1000, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_stats(&db, 99, 1, &stats) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_stats(&db, 1, 1000, &stats) == LDB_ERR);
@@ -1112,15 +1118,10 @@ void test_search_invalid_args(void)
     ldb_db_t db = {0};
     uint64_t seqnum = 0;
 
-    TEST_ASSERT(ldb_search_by_ts(NULL, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
-    TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
-
-    remove("test.dat");
-    remove("test.idx");
-    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
+    TEST_ASSERT(ldb_search_by_ts(NULL, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_search_by_ts(&db, 1, (ldb_search_e)(9), &seqnum) == LDB_ERR_ARG);
-    ldb_close(&db);
+    TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
 }
 
 void test_search_nominal_case(void)
@@ -1189,7 +1190,7 @@ void test_rollback_invalid_args(void)
 {
     ldb_db_t db = {0};
 
-    TEST_ASSERT(ldb_rollback(NULL, 1) == LDB_ERR);
+    TEST_ASSERT(ldb_rollback(NULL, 1) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_rollback(&db, 1) == LDB_ERR);
 }
 
@@ -1249,7 +1250,7 @@ void test_purge_invalid_args(void)
 {
     ldb_db_t db = {0};
 
-    TEST_ASSERT(ldb_purge(NULL, 10) == LDB_ERR);
+    TEST_ASSERT(ldb_purge(NULL, 10) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_purge(&db, 10) == LDB_ERR);
 }
 
