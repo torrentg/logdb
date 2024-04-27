@@ -209,10 +209,10 @@ void test_open_create_db(void)
     TEST_ASSERT(db.idx_path != NULL && strcmp(db.idx_path, "test.idx") == 0);
     TEST_ASSERT(db.dat_fp != NULL);
     TEST_ASSERT(db.idx_fp != NULL);
-    TEST_ASSERT(db.first_seqnum == 0);
-    TEST_ASSERT(db.first_timestamp == 0);
-    TEST_ASSERT(db.last_seqnum == 0);
-    TEST_ASSERT(db.last_timestamp == 0);
+    TEST_ASSERT(db.state.seqnum1 == 0);
+    TEST_ASSERT(db.state.timestamp1 == 0);
+    TEST_ASSERT(db.state.seqnum2 == 0);
+    TEST_ASSERT(db.state.timestamp2 == 0);
     TEST_ASSERT(db.dat_end == sizeof(ldb_header_dat_t));
     ldb_close(&db);
 }
@@ -235,10 +235,10 @@ void test_open_empty_db(void)
     TEST_ASSERT(db.idx_path != NULL && strcmp(db.idx_path, "test.idx") == 0);
     TEST_ASSERT(db.dat_fp != NULL);
     TEST_ASSERT(db.idx_fp != NULL);
-    TEST_ASSERT(db.first_seqnum == 0);
-    TEST_ASSERT(db.first_timestamp == 0);
-    TEST_ASSERT(db.last_seqnum == 0);
-    TEST_ASSERT(db.last_timestamp == 0);
+    TEST_ASSERT(db.state.seqnum1 == 0);
+    TEST_ASSERT(db.state.timestamp1 == 0);
+    TEST_ASSERT(db.state.seqnum2 == 0);
+    TEST_ASSERT(db.state.timestamp2 == 0);
     TEST_ASSERT(db.dat_end == sizeof(ldb_header_dat_t));
     ldb_close(&db);
 }
@@ -313,7 +313,7 @@ void test_open_and_repair_1(void)
 
     // first entry zeroized
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 0);
+    TEST_ASSERT(db.state.seqnum1 == 0);
     ldb_close(&db);
 }
 
@@ -355,7 +355,7 @@ void test_open_and_repair_2(void)
 
     // incomplete record is zeroized
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.last_seqnum == 10);
+    TEST_ASSERT(db.state.seqnum2 == 10);
 
     ldb_close(&db);
 }
@@ -396,7 +396,7 @@ void test_open_and_repair_3(void)
 
     // second record (incomplete) is zeroized
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.last_seqnum == 10);
+    TEST_ASSERT(db.state.seqnum2 == 10);
 
     ldb_close(&db);
 }
@@ -427,10 +427,10 @@ void test_open_1_entry_ok(void)
 
     // open db with 1-entry (idx will be rebuild)
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 10);
-    TEST_ASSERT(db.first_timestamp == 3);
-    TEST_ASSERT(db.last_seqnum == 10);
-    TEST_ASSERT(db.last_timestamp == 3);
+    TEST_ASSERT(db.state.seqnum1 == 10);
+    TEST_ASSERT(db.state.timestamp1 == 3);
+    TEST_ASSERT(db.state.seqnum2 == 10);
+    TEST_ASSERT(db.state.timestamp2 == 3);
     TEST_ASSERT(db.dat_end == sizeof(ldb_header_dat_t) + sizeof(ldb_record_dat_t) + entry.metadata_len + entry.data_len);
     ldb_close(&db);
 
@@ -460,10 +460,10 @@ void test_open_1_entry_empty(void)
 
     // open db with 1-entry (idx will be rebuild)
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 0);
-    TEST_ASSERT(db.first_timestamp == 0);
-    TEST_ASSERT(db.last_seqnum == 0);
-    TEST_ASSERT(db.last_timestamp == 0);
+    TEST_ASSERT(db.state.seqnum1 == 0);
+    TEST_ASSERT(db.state.timestamp1 == 0);
+    TEST_ASSERT(db.state.seqnum2 == 0);
+    TEST_ASSERT(db.state.timestamp2 == 0);
     TEST_ASSERT(db.dat_end == sizeof(ldb_header_dat_t));
     ldb_close(&db);
 }
@@ -510,10 +510,10 @@ void _test_open_rollbacked_ok(bool check)
 
     // open database
     TEST_ASSERT(ldb_open("", "test", &db, check) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 10);
-    TEST_ASSERT(db.first_timestamp == 1010);
-    TEST_ASSERT(db.last_seqnum == 13);
-    TEST_ASSERT(db.last_timestamp == 1013);
+    TEST_ASSERT(db.state.seqnum1 == 10);
+    TEST_ASSERT(db.state.timestamp1 == 1010);
+    TEST_ASSERT(db.state.seqnum2 == 13);
+    TEST_ASSERT(db.state.timestamp2 == 1013);
     ldb_close(&db);
 }
 
@@ -640,10 +640,10 @@ void test_open_idx_check_fails_1(void)
 
     // open database (finish OK due to idx rebuild)
     TEST_ASSERT(ldb_open("", "test", &db, true) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 10);
-    TEST_ASSERT(db.first_timestamp == 1010);
-    TEST_ASSERT(db.last_seqnum == 13);
-    TEST_ASSERT(db.last_timestamp == 1013);
+    TEST_ASSERT(db.state.seqnum1 == 10);
+    TEST_ASSERT(db.state.timestamp1 == 1010);
+    TEST_ASSERT(db.state.seqnum2 == 13);
+    TEST_ASSERT(db.state.timestamp2 == 1013);
     ldb_close(&db);
 }
 
@@ -684,10 +684,10 @@ void test_open_idx_check_fails_2(void)
 
     // open database (finish OK due to idx rebuild)
     TEST_ASSERT(ldb_open("", "test", &db, true) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 10);
-    TEST_ASSERT(db.first_timestamp == 1010);
-    TEST_ASSERT(db.last_seqnum == 13);
-    TEST_ASSERT(db.last_timestamp == 1013);
+    TEST_ASSERT(db.state.seqnum1 == 10);
+    TEST_ASSERT(db.state.timestamp1 == 1010);
+    TEST_ASSERT(db.state.seqnum2 == 13);
+    TEST_ASSERT(db.state.timestamp2 == 1013);
     ldb_close(&db);
 }
 
@@ -783,8 +783,8 @@ void test_append_invalid_args(void)
     ldb_db_t db = {0};
     ldb_entry_t entry = {0};
 
-    TEST_ASSERT(ldb_append(NULL, &entry, 1, NULL) == LDB_ERR);
-    TEST_ASSERT(ldb_append(&db, NULL, 1, NULL) == LDB_ERR);
+    TEST_ASSERT(ldb_append(NULL, &entry, 1, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_append(&db, NULL, 1, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_append(&db, &entry, 1, NULL) == LDB_ERR);
 }
 
@@ -836,8 +836,8 @@ void test_append_auto(void)
     // append 3 entries
     TEST_ASSERT(ldb_append(&db, entries, len, &num) == LDB_OK);
     TEST_ASSERT(num == len);
-    TEST_ASSERT(db.first_seqnum == 1);
-    TEST_ASSERT(db.last_seqnum == len);
+    TEST_ASSERT(db.state.seqnum1 == 1);
+    TEST_ASSERT(db.state.seqnum2 == len);
     TEST_ASSERT(entries[0].seqnum == 1);
     TEST_ASSERT(entries[1].seqnum == 2);
     TEST_ASSERT(entries[2].seqnum == 3);
@@ -852,8 +852,8 @@ void test_append_auto(void)
     }
     TEST_ASSERT(ldb_append(&db, entries, len, &num) == LDB_OK);
     TEST_ASSERT(num == len);
-    TEST_ASSERT(db.first_seqnum == 1);
-    TEST_ASSERT(db.last_seqnum == 2*len);
+    TEST_ASSERT(db.state.seqnum1 == 1);
+    TEST_ASSERT(db.state.seqnum2 == 2*len);
     TEST_ASSERT(entries[0].seqnum == 4);
     TEST_ASSERT(entries[1].seqnum == 5);
     TEST_ASSERT(entries[2].seqnum == 6);
@@ -898,8 +898,8 @@ void test_append_nominal_case(void)
 
     TEST_ASSERT(ldb_append(&db, entries, len, &num) == LDB_OK);
     TEST_ASSERT(num == len);
-    TEST_ASSERT(db.first_seqnum == 10);
-    TEST_ASSERT(db.last_seqnum == 10 + len - 1);
+    TEST_ASSERT(db.state.seqnum1 == 10);
+    TEST_ASSERT(db.state.seqnum2 == 10 + len - 1);
 
     ldb_close(&db);
 
@@ -938,8 +938,8 @@ void test_append_broken_sequence(void)
 
     TEST_ASSERT(ldb_append(&db, entries, len, &num) == LDB_ERR_ENTRY_SEQNUM);
     TEST_ASSERT(num == 5);
-    TEST_ASSERT(db.first_seqnum == 10);
-    TEST_ASSERT(db.last_seqnum == 10 + num - 1);
+    TEST_ASSERT(db.state.seqnum1 == 10);
+    TEST_ASSERT(db.state.seqnum2 == 10 + num - 1);
 
     ldb_close(&db);
 
@@ -995,6 +995,7 @@ void test_read_invalid_args(void)
 
     TEST_ASSERT(ldb_read(NULL, 1, entries, 3, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_read(&db, 1, NULL, 3, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_read(&db, 1, entries, 0, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_read(&db, 1, entries, 3, NULL) == LDB_ERR);
 }
 
@@ -1211,36 +1212,36 @@ void test_rollback_nominal_case(void)
     end = db.dat_end;
 
     TEST_ASSERT(ldb_rollback(&db, 400) == 0);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 314);
     TEST_ASSERT(db.dat_end == end);
 
     TEST_ASSERT(ldb_rollback(&db, 314) == 0);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 314);
     TEST_ASSERT(db.dat_end == end);
 
     TEST_ASSERT(ldb_rollback(&db, 313) == 1);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 313);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 313);
     TEST_ASSERT(db.dat_end < end);
     end = db.dat_end;
 
     TEST_ASSERT(ldb_rollback(&db, 100) == 213);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 100);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 100);
     TEST_ASSERT(db.dat_end < end);
     end = db.dat_end;
 
     TEST_ASSERT(ldb_rollback(&db, 20) == 80);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 20);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 20);
     TEST_ASSERT(db.dat_end < end);
     end = db.dat_end;
 
     TEST_ASSERT(ldb_rollback(&db, 0) == 1);
-    TEST_ASSERT(db.first_seqnum == 0);
-    TEST_ASSERT(db.last_seqnum == 0);
+    TEST_ASSERT(db.state.seqnum1 == 0);
+    TEST_ASSERT(db.state.seqnum2 == 0);
     TEST_ASSERT(db.dat_end < end);
 
     ldb_close(&db);
@@ -1275,12 +1276,12 @@ void test_purge_nothing(void)
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     append_entries(&db, 20, 314);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 314);
 
     TEST_ASSERT(ldb_purge(&db, 10) == 0);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 314);
 
     ldb_close(&db);
 }
@@ -1296,21 +1297,21 @@ void test_purge_nominal_case(void)
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     append_entries(&db, 20, 314);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 314);
     dat_end = db.dat_end;
 
     TEST_ASSERT(ldb_purge(&db, 100) == 80);
-    TEST_ASSERT(db.first_seqnum == 100);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 100);
+    TEST_ASSERT(db.state.seqnum2 == 314);
     TEST_ASSERT(db.dat_end < dat_end);
     TEST_ASSERT(ldb_read(&db, 101, &entry, 1, NULL) == LDB_OK);
     TEST_ASSERT(entry.seqnum == 101);
     ldb_close(&db);
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 100);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 100);
+    TEST_ASSERT(db.state.seqnum2 == 314);
     ldb_close(&db);
 
     ldb_free_entry(&entry);
@@ -1325,17 +1326,17 @@ void test_purge_all(void)
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
     append_entries(&db, 20, 314);
-    TEST_ASSERT(db.first_seqnum == 20);
-    TEST_ASSERT(db.last_seqnum == 314);
+    TEST_ASSERT(db.state.seqnum1 == 20);
+    TEST_ASSERT(db.state.seqnum2 == 314);
 
     TEST_ASSERT(ldb_purge(&db, 1000) == 295);
-    TEST_ASSERT(db.first_seqnum == 0);
-    TEST_ASSERT(db.last_seqnum == 0);
+    TEST_ASSERT(db.state.seqnum1 == 0);
+    TEST_ASSERT(db.state.seqnum2 == 0);
     ldb_close(&db);
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 0);
-    TEST_ASSERT(db.last_seqnum == 0);
+    TEST_ASSERT(db.state.seqnum1 == 0);
+    TEST_ASSERT(db.state.seqnum2 == 0);
     ldb_close(&db);
 }
 
@@ -1343,24 +1344,24 @@ void test_update_milestone(void)
 {
     ldb_db_t db = {0};
 
-    TEST_ASSERT(ldb_update_milestone(NULL, 10) == LDB_ERR);
+    TEST_ASSERT(ldb_update_milestone(NULL, 10) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_update_milestone(&db, 10) == LDB_ERR);
 
     remove("test.dat");
     remove("test.idx");
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.milestone == 0);
+    TEST_ASSERT(db.state.milestone == 0);
     TEST_ASSERT(ldb_update_milestone(&db, 10) == LDB_OK);
-    TEST_ASSERT(db.milestone == 10);
+    TEST_ASSERT(db.state.milestone == 10);
     TEST_ASSERT(ldb_update_milestone(&db, 42) == LDB_OK);
-    TEST_ASSERT(db.milestone == 42);
+    TEST_ASSERT(db.state.milestone == 42);
     ldb_close(&db);
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.first_seqnum == 0);
-    TEST_ASSERT(db.last_seqnum == 0);
-    TEST_ASSERT(db.milestone == 42);
+    TEST_ASSERT(db.state.seqnum1 == 0);
+    TEST_ASSERT(db.state.seqnum2 == 0);
+    TEST_ASSERT(db.state.milestone == 42);
     ldb_close(&db);
 }
 
