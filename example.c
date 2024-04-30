@@ -158,7 +158,7 @@ int main(void)
     rc = ldb_open("", "example", &db, true);
 
     printf("\ndatabase content:\n");
-    for (size_t sn = db.first_seqnum; sn <= db.last_seqnum; sn += MAX_ENTRIES)
+    for (size_t sn = db.state.seqnum1; sn <= db.state.seqnum2; sn += MAX_ENTRIES)
     {
         ldb_read(&db, sn, rentries, MAX_ENTRIES, &num);
         for (size_t i = 0; i < num; i++)

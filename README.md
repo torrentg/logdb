@@ -13,6 +13,7 @@ The logdb goal is to cover the following case:
 * Minimal memory footprint
 
 Use cases:
+
 * Storage engine in a raft library (fault-tolerant distributed applications)
 * Storage engine for journal-based apps
 

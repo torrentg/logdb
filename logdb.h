@@ -421,6 +421,7 @@ int ldb_update_milestone(ldb_db_t *obj, uint64_t seqnum);
 #include <time.h>
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -1284,7 +1285,7 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
     if (obj->dat_fp == NULL)
         return LDB_ERR_OPEN_DAT;
 
-    if ((obj->dat_fd = dup(fileno(obj->dat_fp))) == -1)
+    if ((obj->dat_fd = open(obj->dat_path, O_RDONLY)) == -1)
         return LDB_ERR_OPEN_DAT;
 
     assert(obj->dat_fd > STDERR_FILENO);
@@ -1428,7 +1429,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     if (obj->idx_fp == NULL)
         return LDB_ERR_OPEN_IDX;
 
-    if ((obj->idx_fd = dup(fileno(obj->idx_fp))) == -1)
+    if ((obj->idx_fd = open(obj->idx_path, O_RDONLY)) == -1)
         return LDB_ERR_OPEN_IDX;
 
     assert(obj->idx_fd > STDERR_FILENO);

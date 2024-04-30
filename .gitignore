@@ -5,6 +5,7 @@ tests
 tests-coverage
 tests-valgrind
 example
+performance
 *.gcda
 *.gcno
 coverage/
