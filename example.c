@@ -57,8 +57,8 @@ int main(void)
     int rc = 0;
 
     // don't mix read and write entries, they have distinct memory-owner
-    ldb_entry_t wentries[MAX_ENTRIES] = {0};
-    ldb_entry_t rentries[MAX_ENTRIES] = {0};
+    ldb_entry_t wentries[MAX_ENTRIES] = {{0}};
+    ldb_entry_t rentries[MAX_ENTRIES] = {{0}};
     ldb_entry_t wentry = {0};
     ldb_entry_t rentry = {0};
 

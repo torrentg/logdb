@@ -142,7 +142,9 @@ static void * run_write(void *args)
     uint64_t time0 = ldb_get_millis();
     size_t num = 0;
 
-    // all records have always the same content
+    // Logdb supports records of variable length.
+    // In this case we use fixed-length records filled with 0's
+    // to avoid to deal with memory alloc and fill it with random content.
     for (size_t i = 0; i < num_entries; i++) {
         entries[i].metadata_len = 0;
         entries[i].metadata = NULL;

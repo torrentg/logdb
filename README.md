@@ -1,15 +1,20 @@
 # logdb
 
 A simple log-structured database.
+It is a header-only C embeded database with no dependencies.
 
-It is a header-only C embeded database with no dependencies. 
-The logdb goal is to cover the following case:
+Logdb is a simple database with the following characteristics:
 
-* Need to persist sequentially ordered data
-* Most operations are write type
-* Data is rarely read or searched
-* Allow to revert last entries (rollback)
-* Eventually purge obsolete entries (purge)
+* Variable length record type
+* Records uniquely identified by a sequential number (seqnum)
+* Records are indexed by timestamp (monotonic non-decreasing field)
+* There are no other indexes other than seqnum and timestamp.
+* Records can be appended, read, and searched
+* Records can not be updated nor deleted
+* Allows to revert last entries (rollback)
+* Allows to remove obsolete entries (purge)
+* Read-write concurrency supported (multi-thread)
+* Automatic data recovery on catastrofic event
 * Minimal memory footprint
 
 Use cases:
@@ -19,19 +24,8 @@ Use cases:
 
 ## Description
 
-Logdb is a simple database with the following characteristics:
-
-* Records have variable length (non-fixed record size)
-* Record identifier is a sequential number
-* Record are indexed by timestamp (monotonic non-decreasing field)
-* Only append function is supported (no update, no delete)
-* Just after insertion data is flushed to disk (no delayed writes)
-* Automatic data recovery on catastrofic event
-* Records can be read (retrieved by seqnum)
-* Records can be searched by id (seqnum)
-* Records can be searched by timestamp
-* Rollback means to remove X records from top
-* Can be purged (removing X records from bottom)
+Basically, logdb is an append-only data file (\*.dat) with an index file (\*.idx) used to speed up lookups. No complex data structures, no sofisticated algorithms, only basic file
+access. We rely on the filesystem cache (managed by the operating system) to ensure read performance.
 
 ### dat file format
 
@@ -58,7 +52,31 @@ Logdb is a simple database with the following characteristics:
 
 Drop off [`logdb.h`](logdb.h) in your project and start using it.
 
-See [`example.c`](example.c).
+```
+#define LDB_IMPL
+#include "logdb.h"
+
+ldb_db_t db = {0};
+ldb_entry_t wentries[MAX_ENTRIES] = {{0}};
+ldb_entry_t rentries[MAX_ENTRIES] = {{0}};
+
+ldb_open("/my/directory", "example", &db, true);
+
+// on write-thread
+fill_entries(wentries, MAX_ENTRIES);
+ldb_append(&db, wentries, MAX_ENTRIES, NULL);
+
+// on read-thread
+ldb_read(&db, 1, rentries, MAX_ENTRIES, NULL);
+process_entries(rentries, MAX_ENTRIES);
+
+ldb_free_entries(rentries, MAX_ENTRIES);
+ldb_close(&db);
+```
+
+Read functions documentation in `logdb.h`.<br/>
+See [`example.c`](example.c) for basic function usage.<br/>
+See [`performance.c`](performance.c) for concurrent usage.
 
 ## Contributors
 

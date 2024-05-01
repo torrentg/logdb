@@ -37,10 +37,26 @@ void append_entries(ldb_db_t *db, uint64_t seqnum1, uint64_t seqnum2)
     }
 }
 
-void test_version(void) {
+void test_version(void)
+{
     const char *version = ldb_version();
     TEST_ASSERT(version != NULL);
-    TEST_CHECK(strcmp(version, "0.5.0") == 0);
+
+    size_t len = strlen(version);
+    TEST_ASSERT(len >= 5);
+
+    TEST_ASSERT(version[0] != '.');
+    TEST_ASSERT(version[len-1] != '.');
+
+    size_t num_dots = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (version[i] == '.')
+            num_dots++;
+        else if (!isdigit(version[i]))
+            TEST_ASSERT(false);
+    }
+
+    TEST_CHECK(num_dots == 2);
 }
 
 void test_strerror(void)
@@ -991,7 +1007,7 @@ bool check_entry(ldb_entry_t *entry, uint64_t seqnum, const char *metadata, cons
 void test_read_invalid_args(void)
 {
     ldb_db_t db = {0};
-    ldb_entry_t entries[3] = {0};
+    ldb_entry_t entries[3] = {{0}};
 
     TEST_ASSERT(ldb_read(NULL, 1, entries, 3, NULL) == LDB_ERR_ARG);
     TEST_ASSERT(ldb_read(&db, 1, NULL, 3, NULL) == LDB_ERR_ARG);
@@ -1002,7 +1018,7 @@ void test_read_invalid_args(void)
 void test_read_empty_db(void)
 {
     ldb_db_t db = {0};
-    ldb_entry_t entries[3] = {0};
+    ldb_entry_t entries[3] = {{0}};
     size_t num = 10;
 
     remove("test.dat");
@@ -1025,7 +1041,7 @@ void test_read_empty_db(void)
 void test_read_nominal_case(void)
 {
     ldb_db_t db = {0};
-    ldb_entry_t entries[10] = {0};
+    ldb_entry_t entries[10] = {{0}};
     size_t num = 0;
 
     remove("test.dat");

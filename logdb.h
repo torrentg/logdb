@@ -35,29 +35,27 @@ SOFTWARE.
 
 /**
  * Logdb is a simple database with the following characteristics:
- *   - Records have variable length (non-fixed record size)
- *   - Record identifier is a sequential number
- *   - Record are indexed by timestamp (monotonic non-decreasing field)
- *   - Only append function is supported (no update, no delete)
- *   - Just after insertion data is flushed to disk (no delayed writes)
- *   - Automatic data recovery on catastrofic event
- *   - Records can be read (retrieved by seqnum)
- *   - Records can be searched by id (seqnum)
- *   - Records can be searched by timestamp
- *   - Rollback means to remove X records from top
- *   - Can be purged (removing X records from bottom)
- * 
- * Logdb is intended in the following case:
- *   - Need to persist sequentially ordered data
- *   - Most operations are write type
- *   - Data is rarely read or searched
+ *   - Variable length record type
+ *   - Records uniquely identified by a sequential number (seqnum)
+ *   - Records are indexed by timestamp (monotonic non-decreasing field)
+ *   - There are no other indexes other than seqnum and timestamp.
+ *   - Records can be appended, read, and searched
+ *   - Records can not be updated nor deleted
  *   - Allows to revert last entries (rollback)
- *   - Eventually purge obsolete entries (purge)
+ *   - Allows to remove obsolete entries (purge)
+ *   - Read-write concurrency supported (multi-thread)
+ *   - Automatic data recovery on catastrofic event
  *   - Minimal memory footprint
  * 
  * Use cases:
  *   - Storage engine in a raft library (fault-tolerant distributed applications)
  *   - Storage engine for journal-based apps
+ * 
+ * Basically, logdb is an append-only data file (\*.dat) with 
+ * an index file (\*.idx) used to speed up lookups. No complex 
+ * data structures, no sofisticated algorithms, only basic file
+ * access. We rely on the filesystem cache (managed by the operating 
+ * system) to ensure read performance.
  * 
  * dat file format
  * ---------------
@@ -73,7 +71,6 @@ SOFTWARE.
  *   format         timestamp1                      timestamp2
  *   etc            checksum1                       checksum2
  *                  length1                         length2
- * 
  * 
  * idx file format
  * ---------------
@@ -126,8 +123,8 @@ SOFTWARE.
  *               └ search()       R       R     
  */
 
-#define LDB_VERSION_MAJOR          0
-#define LDB_VERSION_MINOR          5
+#define LDB_VERSION_MAJOR          1
+#define LDB_VERSION_MINOR          0
 #define LDB_VERSION_PATCH          0
 
 #define LDB_OK                     0
@@ -474,9 +471,12 @@ typedef struct {
     #define LDB_INLINE     /**/
 #endif
 
-#if __has_attribute(__fallthrough__)
-    # define fallthrough   __attribute__((__fallthrough__))
-#else
+#if defined __has_attribute
+    #if __has_attribute(__fallthrough__)
+        # define fallthrough   __attribute__((__fallthrough__))
+    #endif
+#endif
+#ifndef fallthrough
     # define fallthrough   do {} while (0)  /* fallthrough */
 #endif
 

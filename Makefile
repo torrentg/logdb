@@ -2,7 +2,7 @@
 CFLAGS= -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Wnull-dereference -pthread
 LDFLAGS= -lpthread
 
-all: tests coverage cppcheck valgrind example
+all: tests example performance
 
 tests: logdb.h tests.c
 	$(CC) -g $(CFLAGS) -DRUNNING_ON_VALGRIND -o tests tests.c $(LDFLAGS)
