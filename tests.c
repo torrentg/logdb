@@ -25,10 +25,10 @@ void append_entries(ldb_db_t *db, uint64_t seqnum1, uint64_t seqnum2)
         ldb_entry_t entry = {
             .seqnum = seqnum1,
             .timestamp = seqnum1 - (seqnum1 % 10),
+            .metadata_len = (uint32_t) strlen(metadata) + 1,
+            .data_len = (uint32_t) strlen(data) + 1,
             .metadata = metadata,
-            .data = data,
-            .metadata_len = strlen(metadata) + 1,
-            .data_len = strlen(data) + 1
+            .data = data
         };
 
         TEST_ASSERT(ldb_append(db, &entry, 1, NULL) == LDB_OK);
@@ -433,8 +433,8 @@ void test_open_1_entry_ok(void)
     ldb_entry_t entry = {
         .seqnum = 10,
         .timestamp = 3,
-        .metadata_len = strlen(metadata),
-        .data_len = strlen(data),
+        .metadata_len = (uint32_t) strlen(metadata),
+        .data_len = (uint32_t) strlen(data),
         .metadata = (char *) metadata,
         .data = (char *) data
     };
@@ -761,7 +761,7 @@ void test_alloc_free_entry(void)
 
     // used to 'force' an allocation just after the previous one
     // avoiding a realloc was done in the same place
-    char *aux = calloc(1000,1);
+    char *aux = (char *) calloc(1000,1);
 
     TEST_ASSERT(ldb_alloc_entry(&entry, 2, 5000));
     TEST_ASSERT(entry.metadata_len == 2);
@@ -782,7 +782,7 @@ void test_alloc_free_entries(void)
     ldb_free_entries(entries, 0);
 
     for (int i = 0; i < 3; i++) {
-        entries[i].metadata = malloc(10);
+        entries[i].metadata = (char *) malloc(10);
         entries[i].data = entries[i].metadata + 4;
     }
 
@@ -973,8 +973,8 @@ void test_append_lack_of_data(void)
         .seqnum = 10,
         .timestamp = 1000,
         .metadata_len = 0,
-        .metadata = NULL,
         .data_len = 0,
+        .metadata = NULL,
         .data = NULL
     };
 

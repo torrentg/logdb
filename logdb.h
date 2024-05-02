@@ -611,8 +611,13 @@ static bool ldb_is_valid_db(ldb_db_t *obj) {
 }
 
 static void ldb_reset_state(ldb_state_t *state) {
-    if (state)
-        *state = (ldb_state_t){0};
+    if (state) {
+        state->seqnum1 = 0;
+        state->timestamp1 = 0;
+        state->seqnum2 = 0;
+        state->timestamp2 = 0;
+        state->milestone = 0;
+    }
 }
 
 static int ldb_close_files(ldb_db_t *obj)
@@ -1421,6 +1426,7 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     ldb_header_idx_t header = {0};
     ldb_record_idx_t record_0 = {0};
     ldb_record_idx_t record_n = {0};
+    ldb_record_dat_t record_dat = {0};
     size_t pos = 0;
     size_t len = 0;
 
@@ -1587,8 +1593,6 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     }
 
     // read last record (dat)
-    ldb_record_dat_t record_dat = {0};
-
     pos = record_n.pos;
     len = ldb_get_file_size(obj->dat_fp);
 
@@ -1950,6 +1954,11 @@ int ldb_search_by_ts(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint6
 
     int ret = LDB_ERR;
     ldb_state_t state;
+    ldb_record_idx_t record = {0};
+    uint64_t sn1 = 0;
+    uint64_t sn2 = 0;
+    uint64_t ts1 = 0;
+    uint64_t ts2 = 0;
 
     if (!ldb_is_valid_db(obj))
         exit_function(LDB_ERR);
@@ -1977,11 +1986,10 @@ int ldb_search_by_ts(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint6
         exit_function(LDB_OK);
     }
 
-    ldb_record_idx_t record = {0};
-    uint64_t sn1 = state.seqnum1;
-    uint64_t sn2 = state.seqnum2;
-    uint64_t ts1 = state.timestamp1;
-    uint64_t ts2 = state.timestamp2;
+    sn1 = state.seqnum1;
+    sn2 = state.seqnum2;
+    ts1 = state.timestamp1;
+    ts2 = state.timestamp2;
 
     assert(ts1 <= timestamp && timestamp <= ts2);
 
@@ -2028,6 +2036,11 @@ long ldb_rollback(ldb_db_t *obj, uint64_t seqnum)
     pthread_mutex_lock(&obj->mutex_files);
 
     int ret = LDB_ERR;
+    long removed_entries = 0;
+    uint64_t csn = 0;
+    ldb_record_idx_t record_idx = {0};
+    size_t dat_end_new = sizeof(ldb_header_dat_t);
+    uint64_t last_timestamp_new = 0;
 
     if (!ldb_is_valid_db(obj))
         exit_function(LDB_ERR);
@@ -2036,11 +2049,8 @@ long ldb_rollback(ldb_db_t *obj, uint64_t seqnum)
     if (obj->state.seqnum2 <= seqnum)
         exit_function(0);
 
-    long removed_entries = (long) obj->state.seqnum2 - (long) ldb_max(seqnum, obj->state.seqnum1 - 1);
-    uint64_t csn = obj->state.seqnum2;
-    ldb_record_idx_t record_idx = {0};
-    size_t dat_end_new = sizeof(ldb_header_dat_t);
-    uint64_t last_timestamp_new = 0;
+    removed_entries = (long) obj->state.seqnum2 - (long) ldb_max(seqnum, obj->state.seqnum1 - 1);
+    csn = obj->state.seqnum2;
 
     if (seqnum >= obj->state.seqnum1)
     {
@@ -2121,6 +2131,13 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
     ldb_record_dat_t record_dat = {0};
     char *tmp_path = NULL;
     FILE *tmp_fp = NULL;
+    size_t pos = 0;
+    ldb_header_dat_t header = {
+        .magic_number = LDB_MAGIC_NUMBER,
+        .format = LDB_FORMAT_1,
+        .text = {0},
+        .milestone = 0
+    };
 
     if (!ldb_is_valid_db(obj))
         exit_function(LDB_ERR);
@@ -2165,7 +2182,7 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
     if ((ret = ldb_read_record_idx(obj->idx_fd, &obj->state, seqnum, &record_idx)) != LDB_OK)
         exit_function(ret);
 
-    size_t pos = record_idx.pos;
+    pos = record_idx.pos;
 
     if ((ret = ldb_read_record_dat(obj->dat_fd, pos, &record_dat, true)) != LDB_OK)
         exit_function(ret);
@@ -2178,13 +2195,6 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
 
     if ((tmp_fp = fopen(tmp_path, "w")) == NULL)
         exit_function(LDB_ERR_TMP_FILE);
-
-    ldb_header_dat_t header = {
-        .magic_number = LDB_MAGIC_NUMBER,
-        .format = LDB_FORMAT_1,
-        .text = {0},
-        .milestone = 0
-    };
 
     strncpy(header.text, LDB_TEXT_DAT, sizeof(header.text));
 
