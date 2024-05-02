@@ -123,23 +123,23 @@ int main(void)
     rc = ldb_stats(&db, 0, 100, &stats);
     print_result("stats range [0-100] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
 
-    rc = ldb_search_by_ts(&db, 0, LDB_SEARCH_LOWER, &seqnum1);
-    rc = ldb_search_by_ts(&db, 0, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(&db, 0, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(&db, 0, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=0 (lower=%zu, upper=%zu)", rc, seqnum1, seqnum2);
 
-    rc = ldb_search_by_ts(&db, 42, LDB_SEARCH_LOWER, &seqnum1);
-    rc = ldb_search_by_ts(&db, 42, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(&db, 42, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(&db, 42, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=42 (lower=%zu, upper=%zu)", rc, seqnum1, seqnum2);
 
-    rc = ldb_search_by_ts(&db, 1000, LDB_SEARCH_LOWER, &seqnum1);
-    rc = ldb_search_by_ts(&db, 1000, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(&db, 1000, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(&db, 1000, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=1000 (lower=%zu, upper=%zu)", rc, seqnum1, seqnum2);
 
     timestamp = ldb_get_millis() + 9000;
-    rc = ldb_search_by_ts(&db, timestamp, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(&db, timestamp, LDB_SEARCH_LOWER, &seqnum1);
     print_result("search ts=%zu, mode=lower", rc, timestamp);
 
-    rc = ldb_search_by_ts(&db, timestamp, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(&db, timestamp, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=%zu, mode=upper", rc, timestamp);
 
     rc = ldb_rollback(&db, 9999);

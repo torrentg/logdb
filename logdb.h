@@ -359,7 +359,7 @@ int ldb_stats(ldb_db_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *st
  * @param[out] seqnum Resulting seqnum (distinct than NULL, 0 = NOT_FOUND).
  * @return Error code (0 = OK).
  */
-int ldb_search_by_ts(ldb_db_t *obj, uint64_t ts, ldb_search_e mode, uint64_t *seqnum);
+int ldb_search(ldb_db_t *obj, uint64_t ts, ldb_search_e mode, uint64_t *seqnum);
 
 /**
  * Remove all entries greater than seqnum.
@@ -1943,7 +1943,7 @@ LDB_STATS_END:
 #undef exit_function
 #define exit_function(errnum) do { ret = errnum; goto LDB_SEARCH_END; } while(0)
 
-int ldb_search_by_ts(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint64_t *seqnum)
+int ldb_search(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint64_t *seqnum)
 {
     if (!obj || !seqnum || (mode != LDB_SEARCH_LOWER && mode != LDB_SEARCH_UPPER))
         return LDB_ERR_ARG;

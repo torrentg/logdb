@@ -1135,10 +1135,10 @@ void test_search_invalid_args(void)
     ldb_db_t db = {0};
     uint64_t seqnum = 0;
 
-    TEST_ASSERT(ldb_search_by_ts(NULL, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, NULL) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_search_by_ts(&db, 1, (ldb_search_e)(9), &seqnum) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_search_by_ts(&db, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
+    TEST_ASSERT(ldb_search(NULL, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_search(&db, 1, LDB_SEARCH_LOWER, NULL) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_search(&db, 1, (ldb_search_e)(9), &seqnum) == LDB_ERR_ARG);
+    TEST_ASSERT(ldb_search(&db, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);
 }
 
 void test_search_nominal_case(void)
@@ -1151,54 +1151,54 @@ void test_search_nominal_case(void)
 
     TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
 
-    TEST_ASSERT(ldb_search_by_ts(&db, 10, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 10, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
 
     append_entries(&db, 20, 314);
 
     // LDB_SEARCH_LOWER
-    TEST_ASSERT(ldb_search_by_ts(&db, 0, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 0, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 20);
-    TEST_ASSERT(ldb_search_by_ts(&db, 10, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 10, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 20);
-    TEST_ASSERT(ldb_search_by_ts(&db, 20, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 20, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 20);
-    TEST_ASSERT(ldb_search_by_ts(&db, 25, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 25, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 30);
-    TEST_ASSERT(ldb_search_by_ts(&db, 30, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 30, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 30);
-    TEST_ASSERT(ldb_search_by_ts(&db, 295, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 295, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 300);
-    TEST_ASSERT(ldb_search_by_ts(&db, 300, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 300, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 300);
-    TEST_ASSERT(ldb_search_by_ts(&db, 305, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 305, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 310);
-    TEST_ASSERT(ldb_search_by_ts(&db, 310, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 310, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 310);
-    TEST_ASSERT(ldb_search_by_ts(&db, 311, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_ASSERT(ldb_search_by_ts(&db, 314, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_ASSERT(ldb_search_by_ts(&db, 999, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 311, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 314, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 999, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
 
     // LDB_SEARCH_UPPER
-    TEST_ASSERT(ldb_search_by_ts(&db, 0, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 0, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 20);
-    TEST_ASSERT(ldb_search_by_ts(&db, 10, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 10, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 20);
-    TEST_ASSERT(ldb_search_by_ts(&db, 20, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 20, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 30);
-    TEST_ASSERT(ldb_search_by_ts(&db, 25, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 25, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 30);
-    TEST_ASSERT(ldb_search_by_ts(&db, 30, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 30, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 40);
-    TEST_ASSERT(ldb_search_by_ts(&db, 295, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 295, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 300);
-    TEST_ASSERT(ldb_search_by_ts(&db, 300, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 300, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 310);
-    TEST_ASSERT(ldb_search_by_ts(&db, 305, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
+    TEST_ASSERT(ldb_search(&db, 305, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
     TEST_ASSERT(seqnum == 310);
-    TEST_ASSERT(ldb_search_by_ts(&db, 310, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_ASSERT(ldb_search_by_ts(&db, 311, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_ASSERT(ldb_search_by_ts(&db, 314, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_ASSERT(ldb_search_by_ts(&db, 999, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 310, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 311, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 314, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
+    TEST_ASSERT(ldb_search(&db, 999, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
 
     ldb_close(&db);
 }

@@ -3,7 +3,6 @@
 *.idx
 tests
 tests-coverage
-tests-valgrind
 example
 performance
 *.gcda
