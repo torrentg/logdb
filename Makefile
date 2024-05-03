@@ -29,6 +29,9 @@ helgrind: performance
 cppcheck: logdb.h
 	cppcheck --enable=all  --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=checkersReport logdb.h
 
+loc:
+	cloc logdb.h tests.c example.c performance.c
+
 clean: 
 	rm -f tests test.dat test.idx test.tmp
 	rm -f example example.dat example.idx example.tmp

@@ -2035,7 +2035,7 @@ long ldb_rollback(ldb_db_t *obj, uint64_t seqnum)
 
     pthread_mutex_lock(&obj->mutex_files);
 
-    int ret = LDB_ERR;
+    long ret = LDB_ERR;
     long removed_entries = 0;
     uint64_t csn = 0;
     ldb_record_idx_t record_idx = {0};

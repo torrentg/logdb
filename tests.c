@@ -3,9 +3,6 @@
 #define LDB_IMPL
 #include "logdb.h"
 
-// gcc -g -Wall -Wextra -Wpedantic -o tests tests.c
-// valgrind --tool=memcheck --leak-check=yes ./tests
-
 void append_entries(ldb_db_t *db, uint64_t seqnum1, uint64_t seqnum2)
 {
     char metadata[128] = {0};
