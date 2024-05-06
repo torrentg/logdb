@@ -124,7 +124,7 @@ SOFTWARE.
  */
 
 #define LDB_VERSION_MAJOR          1
-#define LDB_VERSION_MINOR          0
+#define LDB_VERSION_MINOR          1
 #define LDB_VERSION_PATCH          0
 
 #define LDB_OK                     0
@@ -163,7 +163,6 @@ typedef struct {
     uint64_t timestamp1;          // Timestamp of the first entry
     uint64_t seqnum2;             // Ending seqnum (0 means no entries)
     uint64_t timestamp2;          // Timestamp of the last entry
-    uint64_t milestone;           // Unused (raft library concept)
 } ldb_state_t;
 
 typedef struct
@@ -394,17 +393,6 @@ long ldb_rollback(ldb_db_t *obj, uint64_t seqnum);
  */
 long ldb_purge(ldb_db_t *obj, uint64_t seqnum);
 
-/**
- * Update the milestone value.
- * 
- * Database file is flushed before function return.
- * 
- * @param[in] obj Database to use.
- * @param[in] seqnum Milestone value.
- * @return Error code (0 = OK).
- */
-int ldb_update_milestone(ldb_db_t *obj, uint64_t seqnum);
-
 #ifdef __cplusplus
 }
 #endif
@@ -442,7 +430,6 @@ typedef struct {
     uint64_t magic_number;
     uint32_t format;
     char text[LDB_TEXT_LEN];
-    uint64_t milestone;
 } ldb_header_dat_t;
 
 typedef struct {
@@ -616,7 +603,6 @@ static void ldb_reset_state(ldb_state_t *state) {
         state->timestamp1 = 0;
         state->seqnum2 = 0;
         state->timestamp2 = 0;
-        state->milestone = 0;
     }
 }
 
@@ -811,8 +797,7 @@ static bool ldb_create_file_dat(const char *path)
     ldb_header_dat_t header = {
         .magic_number = LDB_MAGIC_NUMBER,
         .format = LDB_FORMAT_1,
-        .text = {0},
-        .milestone = 0
+        .text = {0}
     };
 
     strncpy(header.text, LDB_TEXT_DAT, sizeof(header.text));
@@ -1315,7 +1300,6 @@ static int ldb_open_file_dat(ldb_db_t *obj, bool check)
         exit_function(LDB_ERR_FMT_DAT);
 
     obj->format = header.format;
-    obj->state.milestone = header.milestone;
 
     if (pos == len)
         return LDB_OK;
@@ -1490,7 +1474,6 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
     else if (check)
     {
         ldb_record_idx_t aux = {0};
-        ldb_record_dat_t record_dat = {0};
 
         while (pos + sizeof(ldb_record_idx_t) <= len)
         {
@@ -2135,8 +2118,7 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
     ldb_header_dat_t header = {
         .magic_number = LDB_MAGIC_NUMBER,
         .format = LDB_FORMAT_1,
-        .text = {0},
-        .milestone = 0
+        .text = {0}
     };
 
     if (!ldb_is_valid_db(obj))
@@ -2244,26 +2226,5 @@ LDB_PURGE_END:
 }
 
 #undef exit_function
-
-int ldb_update_milestone(ldb_db_t *obj, uint64_t seqnum)
-{
-    if (!obj)
-        return LDB_ERR_ARG;
-
-    if (!ldb_is_valid_db(obj))
-        return LDB_ERR;
-
-    if (fseek(obj->dat_fp, (long) offsetof(ldb_header_dat_t, milestone), SEEK_SET) != 0)
-        return LDB_ERR_READ_DAT;
-
-    if (fwrite(&seqnum, sizeof(uint64_t), 1, obj->dat_fp) != 1)
-        return LDB_ERR_WRITE_DAT;
-
-    pthread_mutex_lock(&obj->mutex_data);
-    obj->state.milestone = seqnum;
-    pthread_mutex_unlock(&obj->mutex_data);
-
-    return LDB_OK;
-}
 
 #endif /* LDB_IMPL */

@@ -263,8 +263,7 @@ void test_open_invl_dat_header(void)
     ldb_header_dat_t header = {
         .magic_number = LDB_MAGIC_NUMBER,
         .format = LDB_FORMAT_1,
-        .text = {0},
-        .milestone = 0
+        .text = {0}
     };
 
     remove("test.dat");
@@ -1353,31 +1352,6 @@ void test_purge_all(void)
     ldb_close(&db);
 }
 
-void test_update_milestone(void)
-{
-    ldb_db_t db = {0};
-
-    TEST_ASSERT(ldb_update_milestone(NULL, 10) == LDB_ERR_ARG);
-    TEST_ASSERT(ldb_update_milestone(&db, 10) == LDB_ERR);
-
-    remove("test.dat");
-    remove("test.idx");
-
-    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.state.milestone == 0);
-    TEST_ASSERT(ldb_update_milestone(&db, 10) == LDB_OK);
-    TEST_ASSERT(db.state.milestone == 10);
-    TEST_ASSERT(ldb_update_milestone(&db, 42) == LDB_OK);
-    TEST_ASSERT(db.state.milestone == 42);
-    ldb_close(&db);
-
-    TEST_ASSERT(ldb_open("", "test", &db, false) == LDB_OK);
-    TEST_ASSERT(db.state.seqnum1 == 0);
-    TEST_ASSERT(db.state.seqnum2 == 0);
-    TEST_ASSERT(db.state.milestone == 42);
-    ldb_close(&db);
-}
-
 TEST_LIST = {
     { "crc32()",                      test_crc32 },
     { "version()",                    test_version },
@@ -1426,6 +1400,5 @@ TEST_LIST = {
     { "purge() nothing",              test_purge_nothing },
     { "purge() nominal case",         test_purge_nominal_case },
     { "purge() all",                  test_purge_all },
-    { "update_milestone()",           test_update_milestone },
     { NULL, NULL }
 };
