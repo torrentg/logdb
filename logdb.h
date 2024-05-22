@@ -102,7 +102,6 @@ SOFTWARE.
  * Main goal: append() function not blocked.
  * File write ops are done with [dat|idx]_fp.
  * File read ops are done with [dat|idx]_fd.
- * [dat|idx]_fd are duplicates (dup) of [dat|idx]_fp.
  * 
  * We use 2 mutex:
  *   - data mutex: grants data integrity ([first|last]_[seqnum|timestamp])
@@ -114,7 +113,7 @@ SOFTWARE.
  * Thread        Function      Mutex    Mutex   Notes
  * -------------------------------------------------------------------
  *               ┌ open()         -       -     Init mutexes, create FILE's used to write and fd's used to read
- *               ├ append()       -       W     dat and idx files flushed at the end. seqnum values updated after flush.
+ *               ├ append()       -       W     dat and idx files flushed at the end. State updated after flush.
  * thread-write: ┼ rollback()     W       W     
  *               ├ purge()        W       W     
  *               └ close()        -       -     Destroy mutexes, close files
@@ -1610,7 +1609,11 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
         record_n.timestamp = record_dat.timestamp;
         record_n.pos = pos;
 
-        pos += sizeof(ldb_record_dat_t) + record_dat.metadata_len + record_dat.data_len;
+        size_t rec_len = sizeof(ldb_record_dat_t) + record_dat.metadata_len + record_dat.data_len;
+        if (pos + rec_len > len)
+            break; // zeroize
+
+        pos += rec_len;
 
         obj->state.seqnum2 = record_dat.seqnum;
         obj->state.timestamp2 = record_dat.timestamp;
@@ -1621,6 +1624,9 @@ static int ldb_open_file_idx(ldb_db_t *obj, bool check)
 
         assert(obj->dat_end == pos);
     }
+
+    if (fflush(obj->idx_fp) != 0)
+        exit_function(LDB_ERR_WRITE_IDX);
 
     if (!ldb_zeroize(obj->dat_fp, pos))
         exit_function(LDB_ERR_WRITE_DAT);
@@ -2226,5 +2232,7 @@ LDB_PURGE_END:
 }
 
 #undef exit_function
+
+#undef LDB_IMPL
 
 #endif /* LDB_IMPL */
