@@ -763,7 +763,7 @@ void test_alloc_free_entry(void)
     TEST_ASSERT(entry.metadata_len == 2);
     TEST_ASSERT(entry.data_len == 5000);
     TEST_ASSERT(entry.metadata != ptr); // this test can fail if mem is reallocated in the same place
-    TEST_ASSERT(entry.data == entry.metadata + sizeof(void*));
+    TEST_ASSERT((char *) entry.data == (char *) entry.metadata + sizeof(void*));
     ldb_free_entry(&entry);
 
     free(aux);
@@ -779,7 +779,7 @@ void test_alloc_free_entries(void)
 
     for (int i = 0; i < 3; i++) {
         entries[i].metadata = (char *) malloc(10);
-        entries[i].data = entries[i].metadata + 4;
+        entries[i].data = (char *) entries[i].metadata + 4;
     }
 
     ldb_free_entries(entries, 3);

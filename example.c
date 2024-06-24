@@ -30,8 +30,8 @@ void print_entry(const char *prefix, const ldb_entry_t *entry) {
     printf("%s{ seqnum=%zu, timestamp=%zu, metadata='%.*s', data='%.*s' }\n", 
             prefix,
             entry->seqnum, entry->timestamp, 
-            entry->metadata_len, entry->metadata, 
-            entry->data_len, entry->data);
+            entry->metadata_len, (char *) entry->metadata, 
+            entry->data_len, (char *) entry->data);
 }
 
 void print_result(const char *fmt, int rc, ...)

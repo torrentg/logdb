@@ -172,8 +172,8 @@ typedef struct ldb_entry_t {
     uint64_t timestamp;
     uint32_t metadata_len;
     uint32_t data_len;
-    char *metadata;
-    char *data;
+    void *metadata;
+    void *data;
 } ldb_entry_t;
 
 typedef struct ldb_stats_t {
