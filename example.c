@@ -1,6 +1,6 @@
 #include <stdarg.h>
+#include <stdlib.h>
 
-#define LDB_IMPL
 #include "logdb.h"
 
 #define MAX_ENTRIES 10
@@ -46,9 +46,8 @@ void print_result(const char *fmt, int rc, ...)
     printf("%-65s: %s\n", buf, ldb_strerror(rc));
 }
 
-int main(void)
+int run(ldb_db_t *db)
 {
-    ldb_db_t db = {0};
     ldb_stats_t stats = {0};
     size_t timestamp = 0;
     size_t seqnum1 = 0;
@@ -69,103 +68,106 @@ int main(void)
     remove("example.idx");
 
     // create an empty database
-    rc = ldb_open("", "example", &db, true);
+    rc = ldb_open("", "example", db, true);
     print_result("open", rc);
 
     wentry = create_random_entry(1000, 42);
-    rc = ldb_append(&db, &wentry, 1, NULL);
+    rc = ldb_append(db, &wentry, 1, NULL);
     print_result("append initial entry (sn=1000 and ts=42)", rc);
 
     wentry = create_random_entry(1001, 42);
-    rc = ldb_append(&db, &wentry, 1, NULL);
+    rc = ldb_append(db, &wentry, 1, NULL);
     print_result("append entry with correlative seqnum", rc);
 
     wentry.seqnum = 999;
-    rc = ldb_append(&db, &wentry, 1, NULL);
+    rc = ldb_append(db, &wentry, 1, NULL);
     print_result("append entry with non-correlative seqnum", rc);
 
     wentry.seqnum = 1002;
     wentry.timestamp = 40;
-    rc = ldb_append(&db, &wentry, 1, NULL);
+    rc = ldb_append(db, &wentry, 1, NULL);
     print_result("append entry with timestamp less than previous", rc);
 
     wentry = create_random_entry(0, 43);
-    rc = ldb_append(&db, &wentry, 1, NULL);
+    rc = ldb_append(db, &wentry, 1, NULL);
     print_result("append entry with seqnum = 0 (assigned next value, %zu)", rc, wentry.seqnum);
 
     wentry = create_random_entry(0, 0);
-    rc = ldb_append(&db, &wentry, 1, NULL);
+    rc = ldb_append(db, &wentry, 1, NULL);
     print_result("append entry with timestamp = 0 (assigned current millis)", rc);
 
     // you can enter a batch of entries (1 single flush is done at the end)
     for (size_t i = 0; i < MAX_ENTRIES; i++) {
         wentries[i] = create_random_entry(0, 0);
     }
-    rc = ldb_append(&db, wentries, MAX_ENTRIES, NULL);
+    rc = ldb_append(db, wentries, MAX_ENTRIES, NULL);
     print_result("append 10 entries in a row", rc);
 
-    rc = ldb_read(&db, 1001, &rentry, 1, NULL);
+    /// timestamp of last entry
+    timestamp = wentries[MAX_ENTRIES-1].timestamp;
+
+    rc = ldb_read(db, 1001, &rentry, 1, NULL);
     print_result("read existing entry (sn=1001)", rc);
 
-    rc = ldb_read(&db, 9999, &rentry, 1, NULL);
+    rc = ldb_read(db, 9999, &rentry, 1, NULL);
     print_result("read non-existing entry (sn=9999)", rc);
 
     // you can read multiple entries in a row
-    rc = ldb_read(&db, 1010, rentries, MAX_ENTRIES, &num);
+    rc = ldb_read(db, 1010, rentries, MAX_ENTRIES, &num);
     print_result("read %d entries starting at 1010 (read-entries=%zu)", rc, MAX_ENTRIES, num);
 
-    rc = ldb_stats(&db, 0, 9999, &stats);
+    rc = ldb_stats(db, 0, 9999, &stats);
     print_result("stats range [0-9999] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
 
-    rc = ldb_stats(&db, 1005, 1011, &stats);
+    rc = ldb_stats(db, 1005, 1011, &stats);
     print_result("stats range [1005-1011] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
 
-    rc = ldb_stats(&db, 0, 100, &stats);
+    rc = ldb_stats(db, 0, 100, &stats);
     print_result("stats range [0-100] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
 
-    rc = ldb_search(&db, 0, LDB_SEARCH_LOWER, &seqnum1);
-    rc = ldb_search(&db, 0, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(db, 0, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(db, 0, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=0 (lower=%zu, upper=%zu)", rc, seqnum1, seqnum2);
 
-    rc = ldb_search(&db, 42, LDB_SEARCH_LOWER, &seqnum1);
-    rc = ldb_search(&db, 42, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(db, 42, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(db, 42, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=42 (lower=%zu, upper=%zu)", rc, seqnum1, seqnum2);
 
-    rc = ldb_search(&db, 1000, LDB_SEARCH_LOWER, &seqnum1);
-    rc = ldb_search(&db, 1000, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(db, 1000, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(db, 1000, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=1000 (lower=%zu, upper=%zu)", rc, seqnum1, seqnum2);
 
-    timestamp = ldb_get_millis() + 9000;
-    rc = ldb_search(&db, timestamp, LDB_SEARCH_LOWER, &seqnum1);
+    rc = ldb_search(db, timestamp, LDB_SEARCH_LOWER, &seqnum1);
     print_result("search ts=%zu, mode=lower", rc, timestamp);
 
-    rc = ldb_search(&db, timestamp, LDB_SEARCH_UPPER, &seqnum2);
+    rc = ldb_search(db, timestamp, LDB_SEARCH_UPPER, &seqnum2);
     print_result("search ts=%zu, mode=upper", rc, timestamp);
 
-    rc = ldb_rollback(&db, 9999);
+    rc = ldb_rollback(db, 9999);
     print_result("rollback to sn=9999 (removed-entries=%zu)", rc, rc);
 
-    rc = ldb_rollback(&db, 1010);
+    rc = ldb_rollback(db, 1010);
     print_result("rollback to sn=1010 (removed-entries=%zu from top)", rc, rc);
 
-    rc = ldb_purge(&db, 1003);
+    rc = ldb_purge(db, 1003);
     print_result("purge up to sn=1003 (removed-entries=%zu from bottom)", rc, rc);
 
-    rc = ldb_close(&db);
+    rc = ldb_close(db);
     print_result("close", rc, rc);
 
     // open existing database
-    rc = ldb_open("", "example", &db, true);
+    rc = ldb_open("", "example", db, true);
 
     printf("\ndatabase content:\n");
-    for (size_t sn = db.state.seqnum1; sn <= db.state.seqnum2; sn += MAX_ENTRIES)
+    rc = ldb_stats(db, 0, UINT64_MAX, &stats);
+    for (size_t sn = stats.min_seqnum; sn <= stats.max_seqnum; sn += MAX_ENTRIES)
     {
-        ldb_read(&db, sn, rentries, MAX_ENTRIES, &num);
+        ldb_read(db, sn, rentries, MAX_ENTRIES, &num);
         for (size_t i = 0; i < num; i++)
             print_entry("  ", rentries + i);
     }
 
-    rc = ldb_close(&db);
+    rc = ldb_close(db);
 
     // free entries used to read
     ldb_free_entry(&rentry);
@@ -173,3 +175,26 @@ int main(void)
 
     return 0;
 }
+
+#ifdef LDB_IMPL
+int main(void)
+{
+    ldb_db_t db = {0};
+
+    srand(time(NULL));
+    run(&db);
+
+    return 0;
+}
+#else
+int main(void)
+{
+    ldb_db_t *db = ldb_alloc();
+
+    srand(time(NULL));
+    run(db);
+
+    ldb_free(db);
+    return 0;
+}
+#endif

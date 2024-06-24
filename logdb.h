@@ -152,48 +152,22 @@ SOFTWARE.
 extern "C" {
 #endif
 
-typedef enum {
+struct ldb_impl_t;
+typedef struct ldb_impl_t ldb_db_t;
+
+typedef enum ldb_search_e {
     LDB_SEARCH_LOWER,             // Search first entry having timestamp not less than value.
     LDB_SEARCH_UPPER              // Search first entry having timestamp greater than value.
 } ldb_search_e;
 
-typedef struct {
+typedef struct ldb_state_t {
     uint64_t seqnum1;             // Initial seqnum (0 means no entries)
     uint64_t timestamp1;          // Timestamp of the first entry
     uint64_t seqnum2;             // Ending seqnum (0 means no entries)
     uint64_t timestamp2;          // Timestamp of the last entry
 } ldb_state_t;
 
-typedef struct
-{
-    // Fixed info (unchanged)
-    char *name;                   // Database name
-    char *path;                   // Directory where files are located
-    char *dat_path;               // Data filepath (path + filename)
-    char *idx_path;               // Index filepath (path + filename)
-    uint32_t format;              // File format
-
-    // Thread-write variables
-    FILE *dat_fp;                 // Data file pointer (used to write)
-    FILE *idx_fp;                 // Index file pointer (used to write)
-    size_t dat_end;               // Last position on data file
-    bool force_fsync;             // Force fsync after flush
-    char padding[64];             // Padding to avoid destructive interference between threads
-
-    // Thread-read variables
-    int dat_fd;                   // Data file descriptor (used to read)
-    int idx_fd;                   // Index file descriptor (used to read)
-
-    // Shared data (accessed by both threads)
-    ldb_state_t state;            // First and last seqnums and timestamps
-
-    // Guards
-    pthread_mutex_t mutex_data;   // Prevents race condition on state values
-    pthread_mutex_t mutex_files;  // Preserve coherence between shared variable and file contents
-
-} ldb_db_t;
-
-typedef struct {
+typedef struct ldb_entry_t {
     uint64_t seqnum;
     uint64_t timestamp;
     uint32_t metadata_len;
@@ -202,7 +176,7 @@ typedef struct {
     char *data;
 } ldb_entry_t;
 
-typedef struct {
+typedef struct ldb_stats_t {
     uint64_t min_seqnum;
     uint64_t max_seqnum;
     uint64_t min_timestamp;
@@ -228,9 +202,10 @@ const char * ldb_strerror(int errnum);
 
 /**
  * Deallocates the memory pointed by the entry.
+ * It do not dealloc the entry itself.
  * 
  * Use this function to deallocate entries returned by ldb_read().
- * Update entry pointers to NULL and lengths to 0.
+ * Updates entry pointers to NULL and lengths to 0.
  * 
  * @param[in,out] entry Entry to dealloc data (if NULL does nothing).
  */
@@ -246,6 +221,20 @@ void ldb_free_entry(ldb_entry_t *entry);
  * @param[in] len Number of entries.
  */
 void ldb_free_entries(ldb_entry_t *entries, size_t len);
+
+/**
+ * Allocate a new ldb_db_t (opaque) object.
+ * 
+ * @return Allocated object or NULL if no memory.
+ */
+ldb_db_t * ldb_alloc(void);
+
+/**
+ * Deallocates a ldb_db_t object.
+ * 
+ * @param obj Object to deallocate.
+ */
+void ldb_free(ldb_db_t *obj);
 
 /**
  * Open a database.
@@ -425,19 +414,48 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum);
 #define LDB_MAGIC_NUMBER        0x211ABF1A62646C00
 #define LDB_FORMAT_1            1
 
-typedef struct {
+typedef struct ldb_impl_t
+{
+    // Fixed info (unchanged)
+    char *name;                   // Database name
+    char *path;                   // Directory where files are located
+    char *dat_path;               // Data filepath (path + filename)
+    char *idx_path;               // Index filepath (path + filename)
+    uint32_t format;              // File format
+
+    // Thread-write variables
+    FILE *dat_fp;                 // Data file pointer (used to write)
+    FILE *idx_fp;                 // Index file pointer (used to write)
+    size_t dat_end;               // Last position on data file
+    bool force_fsync;             // Force fsync after flush
+    char padding[64];             // Padding to avoid destructive interference between threads
+
+    // Thread-read variables
+    int dat_fd;                   // Data file descriptor (used to read)
+    int idx_fd;                   // Index file descriptor (used to read)
+
+    // Shared data (accessed by both threads)
+    ldb_state_t state;            // First and last seqnums and timestamps
+
+    // Guards
+    pthread_mutex_t mutex_data;   // Prevents race condition on state values
+    pthread_mutex_t mutex_files;  // Preserve coherence between shared variable and file contents
+
+} ldb_impl_t;
+
+typedef struct ldb_header_dat_t {
     uint64_t magic_number;
     uint32_t format;
     char text[LDB_TEXT_LEN];
 } ldb_header_dat_t;
 
-typedef struct {
+typedef struct ldb_header_idx_t {
     uint64_t magic_number;
     uint32_t format;
     char text[LDB_TEXT_LEN];
 } ldb_header_idx_t;
 
-typedef struct {
+typedef struct ldb_record_dat_t {
     uint64_t seqnum;
     uint64_t timestamp;
     uint32_t metadata_len;
@@ -445,7 +463,7 @@ typedef struct {
     uint32_t checksum;
 } ldb_record_dat_t;
 
-typedef struct {
+typedef struct ldb_record_idx_t {
     uint64_t seqnum;
     uint64_t timestamp;
     uint64_t pos;
@@ -588,7 +606,7 @@ static uint64_t ldb_clamp(uint64_t val, uint64_t lo, uint64_t hi) {
 }
 
 LDB_INLINE
-static bool ldb_is_valid_db(ldb_db_t *obj) {
+static bool ldb_is_valid_db(ldb_impl_t *obj) {
     return (obj &&
             obj->dat_fp && !feof(obj->dat_fp) && !ferror(obj->dat_fp) &&
             obj->idx_fp && !feof(obj->idx_fp) && !ferror(obj->idx_fp) &&
@@ -605,7 +623,7 @@ static void ldb_reset_state(ldb_state_t *state) {
     }
 }
 
-static int ldb_close_files(ldb_db_t *obj)
+static int ldb_close_files(ldb_impl_t *obj)
 {
     if (!obj)
         return LDB_OK;
@@ -635,7 +653,7 @@ static int ldb_close_files(ldb_db_t *obj)
 
 #define LDB_FREE(ptr) do { free(ptr); ptr = NULL; } while(0)
 
-static int ldb_free_db(ldb_db_t *obj)
+static int ldb_free_db(ldb_impl_t *obj)
 {
     if (obj == NULL)
         return LDB_OK;
@@ -683,16 +701,16 @@ void ldb_free_entries(ldb_entry_t *entries, size_t len)
         ldb_free_entry(entries + i);
 }
 
-// returns size adjusted to a multiple of sizeof(void*)
+// returns size adjusted to a multiple of sizeof(intptr_t)
 LDB_INLINE 
 static size_t ldb_allocated_size(size_t size) {
-    size_t rem = size % sizeof(void *);
-    return size + (rem == 0 ? 0 : sizeof(void *) - rem);
+    size_t rem = size % sizeof(intptr_t);
+    return size + (rem == 0 ? 0 : sizeof(intptr_t) - rem);
 }
 
 // try to reuse previous allocated memory
 // otherwise, free existent memory and does only 1 memory allocation
-// both returned pointer are aligned to generic type (void*)
+// both returned pointer are aligned to generic type intptr_t
 // returns false on error (allocation error)
 static bool ldb_alloc_entry(ldb_entry_t *entry, uint32_t metadata_len, uint32_t data_len)
 {
@@ -706,7 +724,7 @@ static bool ldb_alloc_entry(ldb_entry_t *entry, uint32_t metadata_len, uint32_t 
 
     size_t len1 = ldb_allocated_size(metadata_len);
     size_t len2 = ldb_allocated_size(data_len);
-    assert((len1 + len2) % sizeof(void *) == 0);
+    assert((len1 + len2) % sizeof(intptr_t) == 0);
 
     char *ptr = NULL;
 
@@ -715,7 +733,7 @@ static bool ldb_alloc_entry(ldb_entry_t *entry, uint32_t metadata_len, uint32_t 
     }
     else {
         ldb_free_entry(entry);
-        ptr = (char *) calloc((len1 + len2)/sizeof(void *), sizeof(void *));
+        ptr = (char *) calloc((len1 + len2)/sizeof(intptr_t), sizeof(intptr_t));
         if (ptr == NULL)
             return false;
     }
@@ -1022,7 +1040,7 @@ static uint32_t ldb_checksum_entry(ldb_entry_t *entry)
 // append data entry at position obj->dat_end
 // updates obj->dat_end value
 // function accessed only by thread-write
-static int ldb_append_entry_dat(ldb_db_t *obj, ldb_state_t *state, ldb_entry_t *entry)
+static int ldb_append_entry_dat(ldb_impl_t *obj, ldb_state_t *state, ldb_entry_t *entry)
 {
     assert(obj);
     assert(state);
@@ -1082,7 +1100,7 @@ static int ldb_append_entry_dat(ldb_db_t *obj, ldb_state_t *state, ldb_entry_t *
     return LDB_OK;
 }
 
-static int ldb_append_record_idx(ldb_db_t *obj, ldb_state_t *state, ldb_record_idx_t *record)
+static int ldb_append_record_idx(ldb_impl_t *obj, ldb_state_t *state, ldb_record_idx_t *record)
 {
     assert(obj);
     assert(state);
@@ -1252,7 +1270,7 @@ static int ldb_read_record_idx(int fd, ldb_state_t *state, uint64_t seqnum, ldb_
  * post-conditions (KO)
  *   - dat files closed
  */
-static int ldb_open_file_dat(ldb_db_t *obj, bool check)
+static int ldb_open_file_dat(ldb_impl_t *obj, bool check)
 {
     assert(obj);
     assert(obj->dat_fp == NULL);
@@ -1396,7 +1414,7 @@ LDB_OPEN_FILE_DAT_END:
  * post-conditions (KO)
  *   - idx files closed
  */
-static int ldb_open_file_idx(ldb_db_t *obj, bool check)
+static int ldb_open_file_idx(ldb_impl_t *obj, bool check)
 {
     assert(obj);
     assert(obj->idx_fp == NULL);
@@ -1657,7 +1675,7 @@ const char * ldb_version(void)
 
 #define exit_function(errnum) do { ret = errnum; goto LDB_OPEN_END; } while(0)
 
-int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
+int ldb_open(const char *path, const char *name, ldb_impl_t *obj, bool check)
 {
     if (path == NULL || name == NULL || obj == NULL)
         return LDB_ERR_ARG;
@@ -1670,7 +1688,7 @@ int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check)
 
     int ret = LDB_OK;
 
-    memset(obj, 0x00, sizeof(ldb_db_t));
+    memset(obj, 0x00, sizeof(ldb_impl_t));
 
     obj->name = strdup(name);
     pthread_mutex_init(&obj->mutex_data, NULL);
@@ -1742,12 +1760,12 @@ LDB_OPEN_END:
 
 #undef exit_function
 
-int ldb_close(ldb_db_t *obj)
+int ldb_close(ldb_impl_t *obj)
 {
     return ldb_free_db(obj);
 }
 
-int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
+int ldb_append(ldb_impl_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
 {
     if (!obj || !entries)
         return LDB_ERR_ARG;
@@ -1814,7 +1832,7 @@ int ldb_append(ldb_db_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
 
 #define exit_function(errnum) do { ret = errnum; goto LDB_READ_END; } while(0)
 
-int ldb_read(ldb_db_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t len, size_t *num)
+int ldb_read(ldb_impl_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t len, size_t *num)
 {
     if (!obj || !entries || len == 0)
         return LDB_ERR_ARG;
@@ -1870,7 +1888,7 @@ LDB_READ_END:
 #undef exit_function
 #define exit_function(errnum) do { ret = errnum; goto LDB_STATS_END; } while(0)
 
-int ldb_stats(ldb_db_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats)
+int ldb_stats(ldb_impl_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats)
 {
     if (!obj || seqnum2 < seqnum1 || !stats)
         return LDB_ERR_ARG;
@@ -1932,7 +1950,7 @@ LDB_STATS_END:
 #undef exit_function
 #define exit_function(errnum) do { ret = errnum; goto LDB_SEARCH_END; } while(0)
 
-int ldb_search(ldb_db_t *obj, uint64_t timestamp, ldb_search_e mode, uint64_t *seqnum)
+int ldb_search(ldb_impl_t *obj, uint64_t timestamp, ldb_search_e mode, uint64_t *seqnum)
 {
     if (!obj || !seqnum || (mode != LDB_SEARCH_LOWER && mode != LDB_SEARCH_UPPER))
         return LDB_ERR_ARG;
@@ -2017,7 +2035,7 @@ LDB_SEARCH_END:
 #undef exit_function
 #define exit_function(errnum) do { ret = errnum; goto LDB_ROLLBACK_END; } while(0)
 
-long ldb_rollback(ldb_db_t *obj, uint64_t seqnum)
+long ldb_rollback(ldb_impl_t *obj, uint64_t seqnum)
 {
     if (!obj)
         return LDB_ERR_ARG;
@@ -2107,7 +2125,7 @@ LDB_ROLLBACK_END:
 #undef exit_function
 #define exit_function(errnum) do { ret = errnum; goto LDB_PURGE_END; } while(0)
 
-long ldb_purge(ldb_db_t *obj, uint64_t seqnum)
+long ldb_purge(ldb_impl_t *obj, uint64_t seqnum)
 {
     if (!obj)
         return LDB_ERR_ARG;
@@ -2232,6 +2250,14 @@ LDB_PURGE_END:
 }
 
 #undef exit_function
+
+ldb_db_t * ldb_alloc(void) {
+    return (ldb_db_t *) calloc(1, sizeof(ldb_impl_t));
+}
+
+void ldb_free(ldb_db_t *obj) {
+    free(obj);
+}
 
 #undef LDB_IMPL
 
