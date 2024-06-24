@@ -60,7 +60,7 @@ ldb_db_t db = {0};
 ldb_entry_t wentries[MAX_ENTRIES] = {{0}};
 ldb_entry_t rentries[MAX_ENTRIES] = {{0}};
 
-ldb_open("/my/directory", "example", &db, true);
+ldb_open(&db, "/my/directory", "example", true);
 
 // on write-thread
 fill_entries(wentries, MAX_ENTRIES);

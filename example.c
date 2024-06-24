@@ -68,7 +68,7 @@ int run(ldb_db_t *db)
     remove("example.idx");
 
     // create an empty database
-    rc = ldb_open("", "example", db, true);
+    rc = ldb_open(db, "", "example", true);
     print_result("open", rc);
 
     wentry = create_random_entry(1000, 42);
@@ -156,7 +156,7 @@ int run(ldb_db_t *db)
     print_result("close", rc, rc);
 
     // open existing database
-    rc = ldb_open("", "example", db, true);
+    rc = ldb_open(db, "", "example", true);
 
     printf("\ndatabase content:\n");
     rc = ldb_stats(db, 0, UINT64_MAX, &stats);

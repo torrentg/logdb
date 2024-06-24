@@ -243,14 +243,14 @@ void ldb_free(ldb_db_t *obj);
  * Update index file if incomplete (not flushed + crash).
  * Rebuild index file when corrupted or not found.
  * 
+ * @param[in,out] obj Uninitialized database object.
  * @param[in] path Directory where database files are located.
  * @param[in] name Database name (chars allowed: [a-ZA-Z0-9_], max length = 32).
- * @param[in,out] obj Uninitialized database object.
  * @param[in] check Check database files (true|false).
  * @return Error code (0 = OK). On error db is closed properly (ldb_close not required).
  *         You can check errno value to get additional error details.
  */
-int ldb_open(const char *path, const char *name, ldb_db_t *obj, bool check);
+int ldb_open(ldb_db_t *obj, const char *path, const char *name, bool check);
 
 /**
  * Close a database.
@@ -1675,7 +1675,7 @@ const char * ldb_version(void)
 
 #define exit_function(errnum) do { ret = errnum; goto LDB_OPEN_END; } while(0)
 
-int ldb_open(const char *path, const char *name, ldb_impl_t *obj, bool check)
+int ldb_open(ldb_impl_t *obj, const char *path, const char *name, bool check)
 {
     if (path == NULL || name == NULL || obj == NULL)
         return LDB_ERR_ARG;

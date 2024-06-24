@@ -498,7 +498,7 @@ int main(int argc, char *argv[])
     signal(SIGINT, signal_handler);
 
     ldb_db_t db = {0};
-    if (ldb_open("", "performance", &db, false) != LDB_OK) {
+    if (ldb_open(&db, "", "performance", false) != LDB_OK) {
         fprintf(stderr, "error opening database\n");
         return EXIT_FAILURE;
     }
