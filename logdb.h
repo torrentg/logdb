@@ -653,7 +653,7 @@ static int ldb_close_files(ldb_impl_t *obj)
 
 #define LDB_FREE(ptr) do { free(ptr); ptr = NULL; } while(0)
 
-static int ldb_free_db(ldb_impl_t *obj)
+int ldb_close(ldb_impl_t *obj)
 {
     if (obj == NULL)
         return LDB_OK;
@@ -1754,16 +1754,11 @@ int ldb_open(ldb_impl_t *obj, const char *path, const char *name, bool check)
     return LDB_OK;
 
 LDB_OPEN_END:
-    ldb_free_db(obj);
+    ldb_close(obj);
     return ret;
 }
 
 #undef exit_function
-
-int ldb_close(ldb_impl_t *obj)
-{
-    return ldb_free_db(obj);
-}
 
 int ldb_append(ldb_impl_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
 {
