@@ -1,7 +1,9 @@
+#include "logdb.h"
+
+#include <time.h>
+#include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
-
-#include "logdb.h"
 
 #define MAX_ENTRIES 10
 

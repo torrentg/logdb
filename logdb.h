@@ -28,10 +28,9 @@ SOFTWARE.
 #ifndef LOGDB_H
 #define LOGDB_H
 
-#include <stdio.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <pthread.h>
 
 /**
  * Logdb is a simple database with the following characteristics:
@@ -392,6 +391,7 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum);
 #ifdef LDB_IMPL
 
 #include <time.h>
+#include <stdio.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -400,7 +400,7 @@ long ldb_purge(ldb_db_t *obj, uint64_t seqnum);
 #include <stdlib.h>
 #include <limits.h>
 #include <string.h>
-#include <stddef.h>
+#include <pthread.h>
 #include <sys/stat.h>
 
 #define LDB_EXT_DAT             ".dat"
