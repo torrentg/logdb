@@ -32,6 +32,9 @@
 #define LDB_IDX_MAGIC_NUMBER    0x78646978656C706E
 #define LDB_FILE_FORMAT         2
 
+#define LDB_STR_HELPER(x)  #x
+#define LDB_STR(x)         LDB_STR_HELPER(x)
+
 #if defined(__GNUC__) || defined(__clang__) || defined(__INTEL_LLVM_COMPILER) 
     #define LDB_INLINE  __attribute__((const)) __attribute__((always_inline)) inline
     #define PACKED      __attribute__((__packed__))
@@ -471,7 +474,8 @@ static bool ldb_zeroize(FILE *fp, size_t pos)
         if (fwrite(buf, ldb_min(max_pos - cur_pos, sizeof(buf)), 1, fp) != 1)
             goto LDB_ZEROIZE_END;
 
-    fflush(fp);
+    if (fflush(fp) != 0)
+        return false;
 
     if (fseek(fp, (long) pos, SEEK_SET) != 0)
         return false;
@@ -787,10 +791,10 @@ static int ldb_open_file_dat(ldb_impl_t *obj, bool check)
         return LDB_ERR_OPEN_DAT;
 
     if ((dat_fd = fileno(obj->dat_fp)) == -1)
-        return LDB_ERR_OPEN_DAT;
+        exit_function(LDB_ERR_OPEN_DAT);
 
     if (flock(dat_fd, LOCK_EX | LOCK_NB) == -1)
-        return LDB_ERR_LOCK;
+        exit_function(LDB_ERR_LOCK);
 
     len = ldb_get_file_size(obj->dat_fp);
 
@@ -930,10 +934,10 @@ static int ldb_open_file_idx(ldb_impl_t *obj, bool check)
         return LDB_ERR_OPEN_IDX;
 
     if ((idx_fd = fileno(obj->idx_fp)) == -1)
-        return LDB_ERR_OPEN_IDX;
+        exit_function(LDB_ERR_OPEN_IDX);
 
     if (flock(idx_fd, LOCK_EX | LOCK_NB) == -1)
-        return LDB_ERR_LOCK;
+        exit_function(LDB_ERR_LOCK);
 
     len = ldb_get_file_size(obj->idx_fp);
 
@@ -1146,14 +1150,7 @@ LDB_OPEN_FILE_IDX_ERR:
 
 const char * ldb_version(void)
 {
-    static char version_str[32] = {0};
-
-    if (version_str[0] == 0) {
-        snprintf(version_str, sizeof(version_str), "%d.%d.%d", 
-                LDB_VERSION_MAJOR, LDB_VERSION_MINOR, LDB_VERSION_PATCH);
-    }
-
-    return version_str;
+    return LDB_STR(LDB_VERSION_MAJOR) "." LDB_STR(LDB_VERSION_MINOR) "." LDB_STR(LDB_VERSION_PATCH);
 }
 
 #define exit_function(errnum) do { ret = errnum; goto LDB_OPEN_ERR; } while(0)
@@ -1372,7 +1369,7 @@ int ldb_read(ldb_journal_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t l
     bytes = pread(dat_fd, buf, read_bytes, (off_t) read_pos);
 
     if (bytes < (ssize_t) sizeof(ldb_record_dat_t))
-        return LDB_ERR_READ_DAT;
+        exit_function(LDB_ERR_READ_DAT);
 
     seq = seqnum - 1;
 
