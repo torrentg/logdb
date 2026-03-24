@@ -23,7 +23,7 @@ typedef struct params_t {
     mode_e mode;
     const char *path;
     const char *name;
-    bool check;
+    int flags;
 
     // details
     bool bulk;
@@ -168,7 +168,7 @@ static int cmd_summary(const params_t *params)
     struct stat stat_idx = {0};
     char meta[LDB_METADATA_LEN] = {0};
 
-    if ((rc = ldb_open(&journal, params->path, params->name, params->check)) != LDB_OK) {
+    if ((rc = ldb_open(&journal, params->path, params->name, params->flags)) != LDB_OK) {
         fprintf(stderr, "%s: %s\n", APP_NAME, ldb_strerror(rc));
         return EXIT_FAILURE;
     }
@@ -228,7 +228,7 @@ static int cmd_details(const params_t *params)
     uint64_t from_seq = 0UL;
     uint64_t to_seq = 0UL;
 
-    if ((rc = ldb_open(&journal, params->path, params->name, params->check)) != LDB_OK)
+    if ((rc = ldb_open(&journal, params->path, params->name, params->flags)) != LDB_OK)
         return_error("%s", ldb_strerror(rc));
 
     if ((rc = ldb_stats(&journal, 0, UINT64_MAX, &stats)) != LDB_OK)
@@ -330,7 +330,7 @@ static int cmd_purge(const params_t *params)
         return EXIT_FAILURE;
     }
 
-    if ((rc = ldb_open(&journal, params->path, params->name, params->check)) != LDB_OK)
+    if ((rc = ldb_open(&journal, params->path, params->name, params->flags)) != LDB_OK)
         return_error("%s", ldb_strerror(rc));
 
     if ((rc = ldb_stats(&journal, 0, UINT64_MAX, &stats)) != LDB_OK)
@@ -369,7 +369,7 @@ static int cmd_rollback(const params_t *params)
         return EXIT_FAILURE;
     }
 
-    if ((rc = ldb_open(&journal, params->path, params->name, params->check)) != LDB_OK)
+    if ((rc = ldb_open(&journal, params->path, params->name, params->flags)) != LDB_OK)
         return_error("%s", ldb_strerror(rc));
 
     if ((rc = ldb_stats(&journal, 0, UINT64_MAX, &stats)) != LDB_OK)
@@ -431,7 +431,7 @@ static bool parse_args(int argc, char **argv, params_t *params)
                 params->path = optarg;
                 break;
             case 'c':
-                params->check = true;
+                params->flags |= LDB_OPEN_CHECK;
                 break;
             case 'f':
                 if (!parse_u64(optarg, &params->from)) {

@@ -63,7 +63,7 @@ int run(ldb_journal_t *journal)
     remove("example.idx");
 
     // create an empty journal
-    rc = ldb_open(journal, "", "example", true);
+    rc = ldb_open(journal, "", "example", LDB_OPEN_CREATE | LDB_OPEN_CHECK);
     print_result("open", rc);
 
     rc = ldb_set_meta(journal, "format=1.6", 16);
@@ -170,7 +170,7 @@ int run(ldb_journal_t *journal)
     print_result("close", rc, rc);
 
     // open existing journal
-    rc = ldb_open(journal, "", "example", true);
+    rc = ldb_open(journal, "", "example", LDB_OPEN_CHECK);
 
     printf("\njournal content:\n");
     rc = ldb_stats(journal, 0, UINT64_MAX, &stats);

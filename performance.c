@@ -525,7 +525,7 @@ int main(int argc, char *argv[])
 
     ldb_journal_t *journal = ldb_alloc();
 
-    if (ldb_open(journal, "", "performance", false) != LDB_OK) {
+    if (ldb_open(journal, "", "performance", LDB_OPEN_CREATE) != LDB_OK) {
         fprintf(stderr, "error opening journal\n");
         return EXIT_FAILURE;
     }
