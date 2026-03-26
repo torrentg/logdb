@@ -93,7 +93,7 @@ static const char * bytes2str(size_t bytes, uint8_t num_decimals)
         dblBytes = bytes / 1000.0;
 
     static char output[200];
-    sprintf(output, "%.*lf %s", num_decimals, dblBytes, bytes_suffix[i]);
+    snprintf(output, sizeof(output), "%.*lf %s", num_decimals, dblBytes, bytes_suffix[i]);
     return output;
 }
 
@@ -525,12 +525,12 @@ int main(int argc, char *argv[])
 
     ldb_journal_t *journal = ldb_alloc();
 
-    if (ldb_open(journal, "", "performance", LDB_OPEN_CREATE) != LDB_OK) {
+    int open_flags = LDB_OPEN_CREATE | (params_journal.force_sync ? LDB_OPEN_FSYNC : 0);
+
+    if (ldb_open(journal, "", "performance", open_flags) != LDB_OK) {
         fprintf(stderr, "error opening journal\n");
         return EXIT_FAILURE;
     }
-
-    ldb_set_fsync(journal, params_journal.force_sync);
 
     pthread_t thread_write;
     args_write_t args_write = { .journal = journal, .params = params_write };

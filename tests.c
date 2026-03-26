@@ -2,6 +2,10 @@
 #include "journal.h"
 #include "journal.c"
 
+// ===========================================
+// Helpers
+// ===========================================
+
 void append_entries(ldb_journal_t *journal, uint64_t seqnum1, uint64_t seqnum2)
 {
     char data[128] = {0};
@@ -28,6 +32,18 @@ void append_entries(ldb_journal_t *journal, uint64_t seqnum1, uint64_t seqnum2)
         seqnum1++;
     }
 }
+
+bool check_entry(const ldb_entry_t *entry, uint64_t seqnum, const char *data)
+{
+    return (entry && 
+            entry->seqnum == seqnum &&
+            entry->data_len == (data == NULL ? 0 : strlen(data) + 1) &&
+            (entry->data == data || (entry->data != NULL && data != NULL && strcmp(entry->data, data) == 0)));
+}
+
+// ===========================================
+// Tests
+// ===========================================
 
 void test_version(void)
 {
@@ -706,6 +722,52 @@ void test_open_idx_check_fails_2(void)
     ldb_close(&journal);
 }
 
+void test_open_idx_missing_last_entry(void)
+{
+    ldb_journal_t journal = {0};
+    ldb_entry_t entries[3] = {{0}};
+    char buf[1024] = {0};
+    size_t num = 0;
+
+    remove("test.dat");
+    remove("test.idx");
+
+    // create journal with 5 entries (seqnum 10..14)
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&journal, 10, 14);
+    ldb_close(&journal);
+
+    // truncate idx to remove last entry (simulate dat flushed but idx not)
+    FILE *fp = fopen("test.idx", "r+b");
+    TEST_ASSERT(fp != NULL);
+    fseek(fp, 0, SEEK_END);
+    long idx_size = ftell(fp);
+    TEST_ASSERT(idx_size > (long) sizeof(ldb_record_idx_t));
+    ftruncate(fileno(fp), idx_size - (long) sizeof(ldb_record_idx_t));
+    fclose(fp);
+
+    // open journal (should detect unindexed entry and rebuild idx)
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    TEST_CHECK(journal.state.seqnum1 == 10);
+    TEST_CHECK(journal.state.timestamp1 == 10);
+    TEST_CHECK(journal.state.seqnum2 == 14);
+    TEST_CHECK(journal.state.timestamp2 == 10);
+
+    // verify last entry is readable
+    TEST_CHECK(ldb_read(&journal, 14, entries, 1, buf, sizeof(buf), &num) == LDB_OK);
+    TEST_CHECK(num == 1);
+    TEST_CHECK(check_entry(&entries[0], 14, "data-14"));
+
+    // verify all entries are readable
+    TEST_CHECK(ldb_read(&journal, 10, entries, 3, buf, sizeof(buf), &num) == LDB_OK);
+    TEST_CHECK(num == 3);
+    TEST_CHECK(check_entry(&entries[0], 10, "data-10"));
+    TEST_CHECK(check_entry(&entries[1], 11, "data-11"));
+    TEST_CHECK(check_entry(&entries[2], 12, "data-12"));
+
+    ldb_close(&journal);
+}
+
 void test_append_invalid_args(void)
 {
     ldb_journal_t journal = {0};
@@ -882,14 +944,6 @@ void test_append_lack_of_data(void)
     TEST_CHECK(ldb_append(&journal, &entry, 1, NULL) == LDB_ERR_ENTRY_DATA);
 
     ldb_close(&journal);
-}
-
-bool check_entry(ldb_entry_t *entry, uint64_t seqnum, const char *data)
-{
-    return (entry && 
-            entry->seqnum == seqnum &&
-            entry->data_len == (data == NULL ? 0 : strlen(data) + 1) &&
-            (entry->data == data || (entry->data != NULL && data != NULL && strcmp(entry->data, data) == 0)));
 }
 
 void test_read_invalid_args(void)
@@ -1292,9 +1346,141 @@ void test_fsync_all(void)
 {
     ldb_journal_t journal = {0};
 
-    TEST_CHECK(ldb_set_fsync(&journal, true) == 0);
-    TEST_CHECK(ldb_set_fsync(&journal, false) == 0);
-    TEST_CHECK(ldb_set_fsync(NULL, true) != 0);
+    remove("test.dat");
+    remove("test.idx");
+
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE | LDB_OPEN_FSYNC) == LDB_OK);
+    ldb_close(&journal);
+
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    ldb_close(&journal);
+
+    remove("test.dat");
+    remove("test.idx");
+}
+
+void test_readonly_open(void)
+{
+    ldb_journal_t journal = {0};
+
+    remove("test.dat");
+    remove("test.idx");
+
+    // cannot open non-existent journal in read-only (no CREATE)
+    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_ERR_FILE_NOT_FOUND);
+
+    // cannot combine CREATE + READONLY
+    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_CREATE | LDB_OPEN_READONLY) == LDB_ERR_READONLY);
+
+    // create a journal with some data
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_entry_t entry = { .seqnum = 1, .timestamp = 100, .data_len = 0, .data = NULL };
+    TEST_ASSERT(ldb_append(&journal, &entry, 1, NULL) == LDB_OK);
+    ldb_close(&journal);
+
+    // open in read-only mode
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_OK);
+    TEST_CHECK(journal.read_only == true);
+    TEST_CHECK(journal.state.seqnum1 == 1);
+    TEST_CHECK(journal.state.seqnum2 == 1);
+    ldb_close(&journal);
+
+    remove("test.dat");
+    remove("test.idx");
+}
+
+void test_readonly_write_ops(void)
+{
+    ldb_journal_t journal = {0};
+    char buf[256] = {0};
+    char meta[LDB_METADATA_LEN] = {0};
+
+    remove("test.dat");
+    remove("test.idx");
+
+    // create a journal with data
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_entry_t entries[3] = {
+        { .seqnum = 1, .timestamp = 10, .data_len = 0, .data = NULL },
+        { .seqnum = 2, .timestamp = 20, .data_len = 0, .data = NULL },
+        { .seqnum = 3, .timestamp = 30, .data_len = 0, .data = NULL },
+    };
+    TEST_ASSERT(ldb_append(&journal, entries, 3, NULL) == LDB_OK);
+    ldb_close(&journal);
+
+    // open read-only and try all write operations
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_OK);
+
+    ldb_entry_t new_entry = { .seqnum = 4, .timestamp = 40, .data_len = 0, .data = NULL };
+    TEST_CHECK(ldb_append(&journal, &new_entry, 1, NULL) == LDB_ERR_READONLY);
+    TEST_CHECK(ldb_rollback(&journal, 2) == (long) LDB_ERR_READONLY);
+    TEST_CHECK(ldb_purge(&journal, 2) == (long) LDB_ERR_READONLY);
+    TEST_CHECK(ldb_set_meta(&journal, buf, 5) == LDB_ERR_READONLY);
+
+    // verify state was not modified
+    TEST_CHECK(journal.state.seqnum2 == 3);
+
+    // read operations must work
+    ldb_entry_t read_entries[3];
+    size_t num = 0;
+    TEST_CHECK(ldb_read(&journal, 1, read_entries, 3, buf, sizeof(buf), &num) == LDB_OK);
+    TEST_CHECK(num == 3);
+
+    uint64_t seqnum = 0;
+    TEST_CHECK(ldb_search(&journal, 20, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
+    TEST_CHECK(seqnum == 2);
+
+    ldb_stats_t stats = {0};
+    TEST_CHECK(ldb_stats(&journal, 1, 3, &stats) == LDB_OK);
+    TEST_CHECK(stats.num_entries == 3);
+
+    TEST_CHECK(ldb_get_meta(&journal, meta, LDB_METADATA_LEN) == LDB_OK);
+
+    ldb_close(&journal);
+
+    remove("test.dat");
+    remove("test.idx");
+}
+
+void test_readonly_no_flock(void)
+{
+    ldb_journal_t journal1 = {0};
+    ldb_journal_t journal2 = {0};
+
+    remove("test.dat");
+    remove("test.idx");
+
+    TEST_ASSERT(ldb_open(&journal1, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+
+    // a second read-only open must succeed even while journal1 holds the exclusive lock
+    TEST_CHECK(ldb_open(&journal2, "", "test", LDB_OPEN_READONLY) == LDB_OK);
+
+    ldb_close(&journal1);
+    ldb_close(&journal2);
+
+    remove("test.dat");
+    remove("test.idx");
+}
+
+void test_readonly_missing_idx(void)
+{
+    ldb_journal_t journal = {0};
+
+    remove("test.dat");
+    remove("test.idx");
+
+    // create a journal with data
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_entry_t entry = { .seqnum = 1, .timestamp = 100, .data_len = 0, .data = NULL };
+    TEST_ASSERT(ldb_append(&journal, &entry, 1, NULL) == LDB_OK);
+    ldb_close(&journal);
+
+    // remove the index file: read-only mode cannot rebuild it
+    remove("test.idx");
+    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_ERR_READONLY);
+
+    remove("test.dat");
+    remove("test.idx");
 }
 
 void test_flock(void)
@@ -1381,6 +1567,7 @@ TEST_LIST = {
     { "open() dat corrupted",         test_open_dat_corrupted },
     { "open() idx check fails (I)",   test_open_idx_check_fails_1 },
     { "open() idx check fails (II)",  test_open_idx_check_fails_2 },
+    { "open() idx missing last entry", test_open_idx_missing_last_entry },
     { "append() invalid args",        test_append_invalid_args },
     { "append() nothing",             test_append_nothing },
     { "append() auto",                test_append_auto },
@@ -1404,6 +1591,10 @@ TEST_LIST = {
     { "alloc() all",                  test_alloc_all },
     { "fsync() all",                  test_fsync_all },
     { "meta() all",                   test_meta_all },
+    { "readonly() open",              test_readonly_open },
+    { "readonly() write ops",         test_readonly_write_ops },
+    { "readonly() no flock",          test_readonly_no_flock },
+    { "readonly() missing idx",       test_readonly_missing_idx },
     { "flock()",                      test_flock },
     { NULL, NULL }
 };

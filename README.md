@@ -3,7 +3,7 @@
 A simple log-structured library for event-driven applications.
 
 Journal is essentially an append-only data file (\*.dat) with an index file (\*.idx) used to speed up lookups.
-No complex data structures, no sofisticated algorithms, only basic file access.
+No complex data structures, no sophisticated algorithms, only basic file access.
 We rely on the filesystem cache (managed by the operating system) to ensure read performance.
 
 Main features:
@@ -17,11 +17,14 @@ Main features:
 * Allows reverting the last entries (rollback)
 * Allows removing obsolete entries (purge)
 * Supports read-write concurrency (multi-thread)
-* Automatic data recovery in case of catastrofic events
+* Automatic data recovery in case of catastrophic events
 * Minimal memory footprint
 * No dependencies
 
 ## File format
+
+Journal file formats (`.dat`, `.idx`) use native host byte order for integer fields (endianness).
+Files copied to a machine with different endianness may not be readable.
 
 ### dat file format
 
