@@ -18,7 +18,7 @@ performance: performance.c journal.h journal.c
 	$(CC) -g $(CFLAGS) -O2 -o $@ performance.c journal.c $(LDFLAGS)
 
 journalctl: journalctl.c journal.h journal.c
-	$(CC) -g $(CFLAGS) -O2 -o $@ journalctl.c $(LDFLAGS)
+	$(CC) -g $(CFLAGS) -O2 -DUSE_DEFAULTS -o $@ journal.c journalctl.c $(LDFLAGS)
 
 coverage: tests.c journal.h journal.c
 	$(CC) --coverage -O0 $(CFLAGS) -o tests-coverage tests.c -lgcov $(LDFLAGS)

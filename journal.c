@@ -35,7 +35,7 @@
 #define LDB_STR_HELPER(x)  #x
 #define LDB_STR(x)         LDB_STR_HELPER(x)
 
-#define exit_function(errnum) do { ret = errnum; goto END_FUNCTION; } while(0)
+#define exit_function(retval) do { ret = retval; goto END_FUNCTION; } while(0)
 
 #if defined(__GNUC__) || defined(__clang__) || defined(__INTEL_LLVM_COMPILER) 
     #define LDB_INLINE  __attribute__((const)) __attribute__((always_inline)) inline
