@@ -298,7 +298,7 @@ static int cmd_bulk(const params_t *params)
 
     while (seq <= to_seq)
     {
-        size_t want = MIN(MAX_ENTRIES, (size_t)(to_seq - seq + 1));
+        size_t want = MIN(MAX_ENTRIES, to_seq - seq + 1);
         size_t num = 0;
 
         if ((rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num)) != LDB_OK)
@@ -367,8 +367,8 @@ static int cmd_purge(const params_t *params)
 
     seq = (params->have_num ? stats.min_seqnum + params->num : params->seq);
 
-    if ((rc = ldb_purge(journal, seq)) < 0)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror((int)rc));
+    if ((rc = (int) ldb_purge(journal, seq)) < 0)
+        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
     printf("Removed entries: %d\n", rc);
 
@@ -404,8 +404,8 @@ static int cmd_rollback(const params_t *params)
 
     seq = (params->have_num ? (stats.max_seqnum >= params->num ? stats.max_seqnum - params->num : 0) : params->seq);
 
-    if ((rc = ldb_rollback(journal, seq)) < 0)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror((int)rc));
+    if ((rc = (int) ldb_rollback(journal, seq)) < 0)
+        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
     printf("Removed entries: %d\n", rc);
 
