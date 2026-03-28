@@ -14,7 +14,6 @@
 #include <inttypes.h>
 #include <sys/stat.h>
 #include "journal.h"
-//#include "journal.c"
 
 #define APP_NAME                "journalctl"
 #define DEFAULT_PATH            "."
@@ -25,7 +24,7 @@
 
 #define MIN(a,b) (((a) < (b)) ? (a) : (b))
 
-void print_entry(FILE *out, const ldb_entry_t *entry);
+void print_journal_entry(FILE *out, const ldb_entry_t *entry);
 
 // Hack to access internal journal info
 typedef struct journal_header_t {
@@ -329,7 +328,7 @@ static int cmd_bulk(const params_t *params)
         }
 
         for (size_t i = 0; i < num; i++)
-            print_entry(stdout, &entries[i]);
+            print_journal_entry(stdout, &entries[i]);
 
         // set next seqnum to read
         seq = entries[num - 1].seqnum + 1;
@@ -599,7 +598,7 @@ int main(int argc, char **argv)
 }
 
 #ifdef USE_DEFAULTS
-void print_entry(FILE *out, const ldb_entry_t *entry)
+void print_journal_entry(FILE *out, const ldb_entry_t *entry)
 {
     char ts[64] = {0};
 
