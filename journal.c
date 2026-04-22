@@ -28,9 +28,6 @@
 #define LDB_EXT_TMP             ".tmp"
 #define LDB_PATH_SEPARATOR      "/"
 #define LDB_NAME_MAX_LENGTH     32
-#define LDB_DAT_MAGIC_NUMBER    0x74616478656C706E
-#define LDB_IDX_MAGIC_NUMBER    0x78646978656C706E
-#define LDB_FILE_FORMAT         2
 
 #define LDB_STR_HELPER(x)  #x
 #define LDB_STR(x)         LDB_STR_HELPER(x)

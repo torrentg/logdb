@@ -120,7 +120,7 @@ SOFTWARE.
 
 #define LDB_VERSION_MAJOR          1
 #define LDB_VERSION_MINOR          1
-#define LDB_VERSION_PATCH          0
+#define LDB_VERSION_PATCH          1
 
 #define LDB_OK                     0
 #define LDB_ERR                   -1
@@ -132,7 +132,7 @@ SOFTWARE.
 #define LDB_ERR_READONLY          -7
 #define LDB_ERR_OPEN_DAT          -8
 #define LDB_ERR_READ_DAT          -9
-#define LDB_ERR_WRITE_DAT         -10
+#define LDB_ERR_WRITE_DAT        -10
 #define LDB_ERR_OPEN_IDX         -11
 #define LDB_ERR_READ_IDX         -12
 #define LDB_ERR_WRITE_IDX        -13
@@ -152,6 +152,9 @@ SOFTWARE.
 #define LDB_OPEN_REPAIR          (1 << 3)   // Repair journal if corrupted (default: false)
 #define LDB_OPEN_FSYNC           (1 << 4)   // Enable fsync after each write (default: false)
 
+#define LDB_DAT_MAGIC_NUMBER       0x74616478656C706EULL
+#define LDB_IDX_MAGIC_NUMBER       0x78646978656C706EULL
+#define LDB_FILE_FORMAT            2
 #define LDB_METADATA_LEN          64
 
 #ifdef __cplusplus
