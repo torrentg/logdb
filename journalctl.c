@@ -227,7 +227,7 @@ static int cmd_summary(const params_t *params)
 
     ldb_stats(journal, 0, UINT64_MAX, &stats);
 
-    if (stats.num_entries == 0) {
+    if (stats.min_seqnum == 0) {
         printf("First entry: (none)\n");
         printf("Last entry:  (none)\n");
         printf("Number of entries: 0\n");
@@ -240,7 +240,7 @@ static int cmd_summary(const params_t *params)
 
         printf("First entry: seqnum=%" PRIu64 ", timestamp=%s\n", stats.min_seqnum, ts1);
         printf("Last entry:  seqnum=%" PRIu64 ", timestamp=%s\n", stats.max_seqnum, ts2);
-        printf("Number of entries: %zu\n", stats.num_entries);
+        printf("Number of entries: %" PRIu64 "\n", stats.max_seqnum - stats.min_seqnum + 1);
     }
 
     ret = EXIT_SUCCESS;
@@ -273,7 +273,7 @@ static int cmd_bulk(const params_t *params)
     if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
-    if (stats.num_entries == 0)
+    if (stats.min_seqnum == 0)
         exit_function(EXIT_SUCCESS, "%s", "(no entries)");
 
     from_seq = (params->have_from ? params->from : stats.min_seqnum);
@@ -301,6 +301,7 @@ static int cmd_bulk(const params_t *params)
         size_t want = MIN(MAX_ENTRIES, to_seq - seq + 1);
         size_t num = 0;
 
+        // read entries in batches
         if ((rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num)) != LDB_OK)
         {
             if (rc == LDB_ERR_NOT_FOUND)
@@ -308,9 +309,6 @@ static int cmd_bulk(const params_t *params)
             else
                 exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
         }
-
-        if (num == 0)
-            break;
 
         // buffer exhausted: entries[num] contains next entry but data == NULL
         if (num < want && entries[num].seqnum != 0 && entries[num].data == NULL)
@@ -327,11 +325,12 @@ static int cmd_bulk(const params_t *params)
             buf = ptr;
         }
 
+        // set next seqnum to read
+        if (num != 0)
+            seq = entries[num - 1].seqnum + 1;
+
         for (size_t i = 0; i < num; i++)
             print_journal_entry(stdout, &entries[i]);
-
-        // set next seqnum to read
-        seq = entries[num - 1].seqnum + 1;
     }
 
     ret = EXIT_SUCCESS;
@@ -362,7 +361,7 @@ static int cmd_purge(const params_t *params)
     if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
-    if (stats.num_entries == 0)
+    if (stats.min_seqnum == 0)
         exit_function(EXIT_SUCCESS, "%s", "(no entries)");
 
     seq = (params->have_num ? stats.min_seqnum + params->num : params->seq);
@@ -399,7 +398,7 @@ static int cmd_rollback(const params_t *params)
     if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
-    if (stats.num_entries == 0)
+    if (stats.min_seqnum == 0)
         exit_function(EXIT_SUCCESS, "%s", "(no entries)");
 
     seq = (params->have_num ? (stats.max_seqnum >= params->num ? stats.max_seqnum - params->num : 0) : params->seq);

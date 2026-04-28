@@ -10,6 +10,7 @@
 #include "journal.h"
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 typedef struct {
     bool truncate;
@@ -63,10 +64,49 @@ typedef struct {
     results_read_t results;
 } args_read_t;
 
+typedef struct {
+    size_t length;
+    char *data;
+} buffer_t;
 
 static volatile bool interrupted = false;
 static const char *bytes_suffix[] = {"B", "KB", "MB", "GB", "TB"};
 #define BYTES_SUFFIX_LEN (sizeof(bytes_suffix)/sizeof(bytes_suffix[0]))
+
+static bool buffer_realloc(buffer_t *buf, size_t min_length)
+{
+    if (!buf || min_length == 0)
+        return false;
+
+    if (buf->data == NULL || buf->length == 0)
+    {
+        size_t new_length = MAX(min_length, 128);
+
+        buf->data = malloc(new_length);
+        if (buf->data == NULL)
+            return false;
+
+        buf->length = new_length;
+        return true;
+    }
+
+    if (buf->length >= min_length)
+        return true;
+
+    size_t new_length = buf->length;
+
+    while (new_length < min_length)
+        new_length *= 2;
+
+    void *tmp = realloc(buf->data, new_length);
+
+    if (tmp == NULL)
+        return false;
+
+    buf->data = tmp;
+    buf->length = new_length;
+    return true;
+}
 
 static uint64_t get_millis(void)
 {
@@ -208,6 +248,47 @@ static void * run_write(void *args)
     return NULL;
 }
 
+static int read_entries(ldb_journal_t *journal, uint64_t from_seq, uint64_t to_seq, ldb_entry_t *entries, size_t num_entries, buffer_t *buffer, results_read_t *results)
+{
+    uint64_t seq = from_seq;
+
+    if (!buffer_realloc(buffer, 1024))
+        return LDB_ERR_MEM;
+
+    while (seq <= to_seq)
+    {
+        int rc = 0;
+        size_t want = MIN(num_entries, to_seq - seq + 1);
+        size_t num = 0;
+
+        // read entries in batches
+        if ((rc = ldb_read(journal, seq, entries, want, buffer->data, buffer->length, &num)) != LDB_OK)
+        {
+            if (rc == LDB_ERR_NOT_FOUND)
+                break;
+            else
+                return rc;
+        }
+
+        // buffer exhausted: entries[num] contains next entry but data == NULL
+        if (num < want && entries[num].seqnum != 0 && entries[num].data == NULL)
+            if (!buffer_realloc(buffer, (size_t) entries[num].data_len + 64))
+                return LDB_ERR_MEM;
+
+        // set next seqnum to read
+        if (num != 0)
+            seq = entries[num - 1].seqnum + 1;
+
+        for (size_t i = 0; i < num ; i++)
+            results->num_bytes += entries[i].data_len;
+
+        results->num_records += num;
+    }
+
+    results->num_queries++;
+    return LDB_OK;
+}
+
 static void * run_read(void *args)
 {
     ldb_journal_t *journal = ((args_read_t *) args)->journal;
@@ -216,8 +297,7 @@ static void * run_read(void *args)
 
     size_t num_entries = params->records_per_query;
     ldb_entry_t *entries = calloc(num_entries, sizeof(ldb_entry_t));
-    size_t buf_len = 1024;
-    char *buf = malloc(buf_len);
+    buffer_t buffer = {.length = 0, .data = NULL};
     uint64_t time0 = get_millis();
     ldb_stats_t stats = {0};
     uint64_t seqnum = 0;
@@ -235,28 +315,18 @@ static void * run_read(void *args)
         if ((results->rc = ldb_stats(journal, 0, SIZE_MAX, &stats)) != LDB_OK)
             break;
 
-        if (stats.num_entries)
-        {
-            if (buf_len < stats.data_size)
-            {
-                char *aux = (char *) realloc(buf, stats.data_size);
-                if (aux != NULL) {
-                    buf_len = stats.data_size;
-                    buf = aux;
-                }
-            }
-
-            seqnum = stats.min_seqnum + rand() % stats.num_entries;
-
-            if ((results->rc = ldb_read(journal, seqnum, entries, num_entries, buf, buf_len, &num)) != LDB_OK)
-                break;
-
-            results->num_queries += (num > 0 ? 1 : 0);
-            results->num_records += num;
-
-            for (size_t i = 0; i < num ; i++)
-                results->num_bytes += entries[i].data_len;
+        if (stats.min_seqnum == 0) {
+            msleep(1);
+            results->time_ms = get_millis() - time0;
+            results->idle_ms++;
+            continue;
         }
+
+        num = stats.max_seqnum - stats.min_seqnum + 1;
+        seqnum = stats.min_seqnum + rand() % num;
+
+        if ((results->rc = read_entries(journal, seqnum, seqnum + num_entries - 1, entries, num_entries, &buffer, results)) != LDB_OK)
+            break;
 
         while (true)
         {
@@ -268,13 +338,14 @@ static void * run_read(void *args)
             if ((double) results->num_records <= seconds * params->records_per_second)
                 break;
 
-            results->idle_ms++;
             msleep(1);
+            results->idle_ms++;
+            results->time_ms++;
         }
     }
 
     free(entries);
-    free(buf);
+    free(buffer.data);
     return NULL;
 }
 

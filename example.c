@@ -5,6 +5,7 @@
 #include "journal.h"
 
 #define MAX_ENTRIES 10
+#define MIN(a,b) (((a) < (b)) ? (a) : (b))
 
 static const char lorem[] = 
     "Lorem ipsum dolor sit amet, consectetur adipiscing elit, " \
@@ -53,7 +54,7 @@ int run(ldb_journal_t *journal)
     size_t num = 0;
     int rc = 0;
 
-    size_t buf_len = 128;
+    size_t buf_len = 1024;
     char *buf = malloc(buf_len);
     ldb_entry_t entries[MAX_ENTRIES] = {{0}};
     ldb_entry_t entry = {0};
@@ -113,31 +114,18 @@ int run(ldb_journal_t *journal)
     rc = ldb_read(journal, 9999, &entry, 1, buf, buf_len, NULL);
     print_result("read non-existing entry (sn=9999)", rc);
 
-    // we need to allocate/reallocate the buffer to store the data
-    rc = ldb_stats(journal, 1010, 1020, &stats);
-    print_result("stats range [1010-1020] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
-
-    if (buf_len < stats.data_size)
-    {
-        char *aux = (char *) realloc(buf, stats.data_size);
-        if (aux != NULL) {
-            buf_len = stats.data_size;
-            buf = aux;
-        }
-    }
-
     // you can read multiple entries in a row
     rc = ldb_read(journal, 1010, entries, MAX_ENTRIES, buf, buf_len, &num);
     print_result("read %d entries starting at 1010 (read-entries=%zu)", rc, MAX_ENTRIES, num);
 
     rc = ldb_stats(journal, 0, 9999, &stats);
-    print_result("stats range [0-9999] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
+    print_result("stats range [0-9999]", rc);
 
     rc = ldb_stats(journal, 1005, 1011, &stats);
-    print_result("stats range [1005-1011] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
+    print_result("stats range [1005-1011]", rc);
 
     rc = ldb_stats(journal, 0, 100, &stats);
-    print_result("stats range [0-100] (num-entries=%zu, size=%zu)", rc, stats.num_entries, stats.index_size + stats.data_size);
+    print_result("stats range [0-100]", rc);
 
     rc = ldb_search(journal, 0, LDB_SEARCH_LOWER, &seqnum1);
     rc = ldb_search(journal, 0, LDB_SEARCH_UPPER, &seqnum2);
@@ -174,23 +162,59 @@ int run(ldb_journal_t *journal)
 
     printf("\njournal content:\n");
     rc = ldb_stats(journal, 0, UINT64_MAX, &stats);
-    for (size_t sn = stats.min_seqnum; sn <= stats.max_seqnum; sn += MAX_ENTRIES)
+
+    if (rc == LDB_ERR_NOT_FOUND)
     {
-        ldb_stats_t tmp = {0};
-        rc = ldb_stats(journal, sn, sn + MAX_ENTRIES, &tmp);
+        printf("\nError getting stats: %s\n", ldb_strerror(rc));
+    }
+    else if (stats.min_seqnum == 0)
+    {
+        printf("  (no entries)\n");
+    }
+    else
+    {
+        uint64_t seq = stats.min_seqnum;
+        uint64_t to_seq = stats.max_seqnum;
 
-        if (buf_len < tmp.data_size)
+        while (seq <= to_seq)
         {
-            char *aux = (char *) realloc(buf, tmp.data_size);
-            if (aux != NULL) {
-                buf_len = tmp.data_size;
-                buf = aux;
-            }
-        }
+            size_t want = MIN(MAX_ENTRIES, to_seq - seq + 1);
 
-        ldb_read(journal, sn, entries, MAX_ENTRIES, buf, buf_len, &num);
-        for (size_t i = 0; i < num; i++)
-            print_entry("  ", entries + i);
+            // read entries in batches
+            if ((rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num)) != LDB_OK)
+            {
+                if (rc == LDB_ERR_NOT_FOUND)
+                    break;
+                else {
+                    printf("\nError reading journal: %s\n", ldb_strerror(rc));
+                    break;
+                }
+            }
+
+            // buffer exhausted: entries[num] contains next entry but data == NULL
+            if (num < want && entries[num].seqnum != 0 && entries[num].data == NULL)
+            {
+                char *ptr = NULL;
+                size_t need = (size_t) entries[num].data_len + 64;
+
+                while (buf_len < need)
+                    buf_len *= 2;
+
+                if ((ptr = (char *) realloc(buf, buf_len)) == NULL) {
+                    printf("\nError resizing buffer: out of memory\n");
+                    break;
+                }
+
+                buf = ptr;
+            }
+
+            // set next seqnum to read
+            if (num != 0)
+                seq = entries[num - 1].seqnum + 1;
+
+            for (size_t i = 0; i < num; i++)
+                print_entry("  ", entries + i);
+        }
     }
 
     rc = ldb_close(journal);

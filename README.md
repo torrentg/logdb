@@ -77,10 +77,8 @@ if (rc != LDB_OK)
 
 ldb_stats(journal, 0, UINT64_MAX, &stats);
 
-print("Number of entries = %zu\n", stats.data_size);
 print("Min seqnum = %zu\n", stats.min_seqnum);
 print("Max seqnum = %zu\n", stats.max_seqnum);
-print("Data bytes = %zu\n", stats.data_size);
 
 rc = ldb_read(journal, stats.min_seqnum, entries, MAX_ENTRIES, buf, sizeof(buf), &num);
 

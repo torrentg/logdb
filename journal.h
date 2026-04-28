@@ -119,8 +119,8 @@ SOFTWARE.
  */
 
 #define LDB_VERSION_MAJOR          1
-#define LDB_VERSION_MINOR          1
-#define LDB_VERSION_PATCH          1
+#define LDB_VERSION_MINOR          2
+#define LDB_VERSION_PATCH          0
 
 #define LDB_OK                     0
 #define LDB_ERR                   -1
@@ -177,13 +177,10 @@ typedef struct ldb_entry_t {
 } ldb_entry_t;
 
 typedef struct ldb_stats_t {
-    uint64_t min_seqnum;          // Minimum sequence number.
-    uint64_t max_seqnum;          // Maximum sequence number.
-    uint64_t min_timestamp;       // Minimum timestamp.
-    uint64_t max_timestamp;       // Maximum timestamp.
-    size_t num_entries;           // Number of entries.
-    size_t data_size;             // Size of data (in bytes).
-    size_t index_size;            // Size of index (in bytes).
+    uint64_t min_seqnum;          // Minimum sequence number (0 means no entries).
+    uint64_t max_seqnum;          // Maximum sequence number (0 means no entries).
+    uint64_t min_timestamp;       // Minimum timestamp (0 means undefined).
+    uint64_t max_timestamp;       // Maximum timestamp (0 means undefined).
 } ldb_stats_t;
 
 /**
@@ -347,6 +344,24 @@ int ldb_read(ldb_journal_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t l
 
 /**
  * Return statistics between seqnum1 and seqnum2 (both included).
+ * 
+ * The requested range [seqnum1, seqnum2] is clamped to the intersection with
+ * the available journal data [min_seqnum, max_seqnum]:
+ *   - If the ranges do not intersect: returns LDB_ERR_NOT_FOUND (empty result).
+ *   - If the ranges partially intersect: stats are computed for the clamped range.
+ *   - If the ranges fully overlap: stats are computed for all requested data.
+ * 
+ * Examples: (assuming that the journal has entries [10, 100])
+ *   - Request [0, UINT64_MAX] -> clamped to [10, 100]
+ *   - Request [20, 90]        -> clamped to [20, 90]
+ *   - Request [5, 50]         -> clamped to [10, 50]
+ *   - Request [50, 200]       -> clamped to [50, 100]
+ *   - Request [5, 9]          -> returns LDB_ERR_NOT_FOUND
+ *   - Request [101, 200]      -> returns LDB_ERR_NOT_FOUND
+ *
+ * Examples: (assuming that the journal is empty)
+ *   - Request [0, 3]          -> clamped to [0, 0]
+ *   - Request [3, 5]          -> LDB_ERR_NOT_FOUND
  * 
  * @param[in] obj Journal to use.
  * @param[in] seqnum1 First sequence number.

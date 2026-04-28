@@ -4,7 +4,7 @@ LDFLAGS= -lpthread
 
 TARGETS = tests example performance journalctl
 
-.PHONY: all clean coverage valgrind helgrind cppcheck loc
+.PHONY: all clean coverage profiler valgrind helgrind cppcheck loc
 
 all: $(TARGETS)
 
@@ -27,6 +27,11 @@ coverage: tests.c journal.h journal.c
 	lcov --no-external -d . -o coverage/coverage.info -c
 	genhtml -o coverage coverage/coverage.info
 
+profiler: performance.c journal.h journal.c
+	$(CC) -g $(CFLAGS) -pg -O2 -o performance-profiler performance.c journal.c $(LDFLAGS)
+	./performance-profiler --bpr=10KB --msw=10 --rpc=40 --msr=10 --rpq=40
+	gprof ./performance-profiler gmon.out > performance-profiler.txt
+
 valgrind: tests
 	valgrind --tool=memcheck --leak-check=yes ./tests
 
@@ -43,4 +48,6 @@ clean:
 	rm -f $(TARGETS)
 	rm -f *.dat *.idx *.tmp *.gcda *.gcno
 	rm -f tests-coverage
+	rm -f performance-profiler*
+	rm -f gmon.out
 	rm -rf coverage/
