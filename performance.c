@@ -262,27 +262,30 @@ static int read_entries(ldb_journal_t *journal, uint64_t from_seq, uint64_t to_s
         size_t num = 0;
 
         // read entries in batches
-        if ((rc = ldb_read(journal, seq, entries, want, buffer->data, buffer->length, &num)) != LDB_OK)
-        {
-            if (rc == LDB_ERR_NOT_FOUND)
-                break;
-            else
-                return rc;
-        }
+        rc = ldb_read(journal, seq, entries, want, buffer->data, buffer->length, &num);
 
-        // buffer exhausted: entries[num] contains next entry but data == NULL
-        if (num < want && entries[num].seqnum != 0 && entries[num].data == NULL)
-            if (!buffer_realloc(buffer, (size_t) entries[num].data_len + 64))
-                return LDB_ERR_MEM;
-
-        // set next seqnum to read
-        if (num != 0)
-            seq = entries[num - 1].seqnum + 1;
+        if (rc != LDB_OK && rc != LDB_ERR_NOT_FOUND)
+            return rc;
 
         for (size_t i = 0; i < num ; i++)
             results->num_bytes += entries[i].data_len;
 
         results->num_records += num;
+
+        if (num < want)
+        {
+            // case: reached end of this journal
+            if (entries[num].seqnum == 0)
+                break;
+
+            // case: buffer too short
+            if (!buffer_realloc(buffer, (size_t) entries[num].data_len + 32))
+                return LDB_ERR_MEM;
+        }
+
+        // set next seqnum to read
+        if (num != 0)
+            seq = entries[num - 1].seqnum + 1;
     }
 
     results->num_queries++;

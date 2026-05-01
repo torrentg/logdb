@@ -324,7 +324,7 @@ int ldb_append(ldb_journal_t *obj, ldb_entry_t *entries, size_t len, size_t *num
  *          entries[num] is filled correctly but data pointer is NULL
  *          If the current buffer size is great than entries[num].data_len you can
  *          call ldb_read(obj, entries[num].seqnum, entries, len - num, ...) again.
- *          Otherwise you need to reallocate the buffer with at least entries[num].data_len + 24 bytes.
+ *          Otherwise you need to reallocate the buffer with at least entries[num].data_len + 32 bytes.
  *   - unused entries are signaled with seqnum = 0
  * 
  * @param[in] obj Journal to use.

@@ -13,18 +13,16 @@
 #include <limits.h>
 #include <inttypes.h>
 #include <sys/stat.h>
+#include <libgen.h>
 #include "journal.h"
 
 #define APP_NAME                "journalctl"
-#define DEFAULT_PATH            "."
 #define EXT_DAT                 ".dat"
-#define PATH_SEPARATOR          "/"
-#define MAX_ENTRIES             128
+#define BATCH_ENTRIES           1024
+#define DEFAULT_BUF_SIZE        (1024 * 1024)
 #define BUF_GROWTH_FACTOR       2
 
 #define MIN(a,b) (((a) < (b)) ? (a) : (b))
-
-void print_journal_entry(FILE *out, const ldb_entry_t *entry);
 
 // Hack to access internal journal info
 typedef struct journal_header_t {
@@ -45,8 +43,8 @@ typedef enum mode_e {
 
 typedef struct params_t {
     mode_e mode;
-    const char *path;
-    const char *name;
+    char path[PATH_MAX];
+    char name[64];
     int flags;
 
     // bulk
@@ -69,20 +67,18 @@ static void print_help(FILE *out)
         "\n"
         "Usage:\n"
         "  %s -h\n"
-        "  %s --summary  [-p PATH] [-c] NAME\n"
-        "  %s --bulk     [-p PATH] [-c] [-f NUM] [-t NUM] NAME\n"
-        "  %s --repair   [-p PATH] NAME\n"
-        "  %s --purge    [-p PATH] (-n NUM | -s SEQ) NAME\n"
-        "  %s --rollback [-p PATH] (-n NUM | -s SEQ) NAME\n"
+        "  %s [-c] FILE\n"
+        "  %s --bulk     [-c] [-f NUM] [-t NUM] FILE\n"
+        "  %s --repair   FILE\n"
+        "  %s --purge    (-n NUM | -s SEQ) FILE\n"
+        "  %s --rollback (-n NUM | -s SEQ) FILE\n"
         "\n"
         "Options:\n"
-        "      --summary           Print a summary for NAME (default mode)\n"
         "      --bulk              List entries in a seqnum range\n"
         "      --repair            Check and repair journal consistency\n"
         "      --purge             Remove oldest entries (from start)\n"
         "      --rollback          Remove newest entries (from end)\n"
         "  -h, --help              Show this help and exit\n"
-        "  -p, --path=PATH         Directory containing NAME.dat/NAME.idx (default: .)\n"
         "  -c, --check             Validate journal consistency when opening\n"
         "  -f, --from=NUM          First seqnum (inclusive)\n"
         "  -t, --to=NUM            Last seqnum (inclusive)\n"
@@ -190,6 +186,16 @@ static void print_hexdump(FILE *out, const unsigned char *p, size_t len)
     }
 }
 
+static void print_journal_entry(FILE *out, const ldb_entry_t *entry)
+{
+    char ts[64] = {0};
+
+    format_timestamp(entry->timestamp, ts, sizeof(ts));
+
+    fprintf(out, "seqnum=%" PRIu64 ", timestamp=%s, data_len=%u\n", entry->seqnum, ts, entry->data_len);
+    print_hexdump(out, (const unsigned char *)entry->data, entry->data_len);
+}
+
 #define exit_function(retval, msg, ...) \
     do { \
         ret = retval; \
@@ -225,7 +231,8 @@ static int cmd_summary(const params_t *params)
     printf("Metadata: \n");
     print_hexdump(stdout, (const unsigned char *)meta, sizeof(meta));
 
-    ldb_stats(journal, 0, UINT64_MAX, &stats);
+    if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
+        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
     if (stats.min_seqnum == 0) {
         printf("First entry: (none)\n");
@@ -257,7 +264,7 @@ static int cmd_bulk(const params_t *params)
     int ret = EXIT_FAILURE;
     ldb_stats_t stats = {0};
     ldb_journal_t *journal = NULL;
-    ldb_entry_t entries[MAX_ENTRIES] = {{0}};
+    ldb_entry_t entries[BATCH_ENTRIES] = {{0}};
     char *buf = NULL;
     size_t buf_len = 0;
     uint64_t seq = 0UL;
@@ -290,7 +297,7 @@ static int cmd_bulk(const params_t *params)
     if (to_seq < stats.min_seqnum || from_seq > stats.max_seqnum)
         exit_function(EXIT_SUCCESS, "%s", "(no entries in range)");
 
-    buf_len = 1024 * 1024;
+    buf_len = DEFAULT_BUF_SIZE;
     if ((buf = (char *) malloc(buf_len)) == NULL)
         exit_function(EXIT_FAILURE, "%s", "out of memory");
 
@@ -298,23 +305,26 @@ static int cmd_bulk(const params_t *params)
 
     while (seq <= to_seq)
     {
-        size_t want = MIN(MAX_ENTRIES, to_seq - seq + 1);
+        size_t want = MIN(BATCH_ENTRIES, to_seq - seq + 1);
         size_t num = 0;
 
-        // read entries in batches
-        if ((rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num)) != LDB_OK)
-        {
-            if (rc == LDB_ERR_NOT_FOUND)
-                break;
-            else
-                exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
-        }
+        rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num);
 
-        // buffer exhausted: entries[num] contains next entry but data == NULL
-        if (num < want && entries[num].seqnum != 0 && entries[num].data == NULL)
+        if (rc != LDB_OK && rc != LDB_ERR_NOT_FOUND)
+            exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+
+        for (size_t i = 0; i < num; i++)
+            print_journal_entry(stdout, &entries[i]);
+
+        if (num < want)
         {
+            // case: reached end of this journal
+            if (entries[num].seqnum == 0)
+                break;
+
+            // case: buffer too short
             char *ptr = NULL;
-            size_t need = (size_t) entries[num].data_len + 64;
+            size_t need = (size_t) entries[num].data_len + 32;
 
             while (buf_len < need)
                 buf_len *= BUF_GROWTH_FACTOR;
@@ -326,11 +336,8 @@ static int cmd_bulk(const params_t *params)
         }
 
         // set next seqnum to read
-        if (num != 0)
+        if (num > 0)
             seq = entries[num - 1].seqnum + 1;
-
-        for (size_t i = 0; i < num; i++)
-            print_journal_entry(stdout, &entries[i]);
     }
 
     ret = EXIT_SUCCESS;
@@ -444,9 +451,7 @@ static void parse_args(int argc, char **argv, params_t *params)
 
     static struct option long_opts[] = {
         {"help",     no_argument,       0, 'h'},
-        {"path",     required_argument, 0, 'p'},
         {"check",    no_argument,       0, 'c'},
-        {"summary",  no_argument,       0, 1000},
         {"bulk",     no_argument,       0, 1001},
         {"repair",   no_argument,       0, 1002},
         {"purge",    no_argument,       0, 1003},
@@ -460,18 +465,14 @@ static void parse_args(int argc, char **argv, params_t *params)
 
     memset(params, 0x00, sizeof(*params));
     params->mode = MODE_SUMMARY;
-    params->path = DEFAULT_PATH;
 
-    while ((opt = getopt_long(argc, argv, "hcp:f:t:n:s:", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "hcf:t:n:s:", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
             case 'h':
                 print_help(stdout);
                 exit(EXIT_SUCCESS);
-            case 'p':
-                params->path = optarg;
-                break;
             case 'c':
                 params->flags |= LDB_OPEN_CHECK;
                 break;
@@ -502,9 +503,6 @@ static void parse_args(int argc, char **argv, params_t *params)
                     exit(EXIT_FAILURE);
                 }
                 params->have_seq = true;
-                break;
-            case 1000:
-                params->mode = MODE_SUMMARY;
                 break;
             case 1001:
                 params->mode = MODE_BULK;
@@ -544,29 +542,31 @@ static void parse_args(int argc, char **argv, params_t *params)
     }
 
     if (optind >= argc) {
-        fprintf(stderr, "%s: NAME is required\n", APP_NAME);
+        fprintf(stderr, "%s: FILE is required\n", APP_NAME);
         exit(EXIT_FAILURE);
     }
 
-    params->name = argv[optind];
+    const char *filepath = argv[optind];
+    size_t flen = strlen(filepath);
 
-    struct stat statbuf = {0};
-    if (stat(params->path, &statbuf) != 0 || !S_ISDIR(statbuf.st_mode)) {
-        fprintf(stderr, "%s: PATH does not exist\n", APP_NAME);
+    if (flen < 5 || strcmp(filepath + flen - 4, EXT_DAT) != 0) {
+        fprintf(stderr, "%s: FILE must end with %s\n", APP_NAME, EXT_DAT);
         exit(EXIT_FAILURE);
     }
 
-    char filename[PATH_MAX] = {0};
-    snprintf(filename, sizeof(filename), "%s%s%s%s", 
-             params->path,
-             (params->path[strlen(params->path) - 1] == PATH_SEPARATOR[0] ? "" : PATH_SEPARATOR),
-             params->name,
-             EXT_DAT);
-
-    if (access(filename, F_OK) != 0) {
-        fprintf(stderr, "%s: %s does not exist\n", APP_NAME, filename);
+    if (access(filepath, F_OK) != 0) {
+        fprintf(stderr, "%s: %s does not exist\n", APP_NAME, filepath);
         exit(EXIT_FAILURE);
     }
+
+    strncpy(params->path, filepath, sizeof(params->path) - 1);
+    dirname(params->path);
+
+    char tmp[PATH_MAX] = {0};
+    strncpy(tmp, filepath, PATH_MAX - 1);
+    char *base = basename(tmp);
+    base[strlen(base) - 4] = '\0';
+    strncpy(params->name, base, sizeof(params->name) - 1);
 }
 
 int main(int argc, char **argv)
@@ -595,15 +595,3 @@ int main(int argc, char **argv)
 
     return EXIT_FAILURE;
 }
-
-#ifdef USE_DEFAULTS
-void print_journal_entry(FILE *out, const ldb_entry_t *entry)
-{
-    char ts[64] = {0};
-
-    format_timestamp(entry->timestamp, ts, sizeof(ts));
-
-    fprintf(out, "seqnum=%" PRIu64 ", timestamp=%s, data_len=%u\n", entry->seqnum, ts, entry->data_len);
-    print_hexdump(out, (const unsigned char *)entry->data, entry->data_len);
-}
-#endif

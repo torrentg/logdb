@@ -181,21 +181,25 @@ int run(ldb_journal_t *journal)
             size_t want = MIN(MAX_ENTRIES, to_seq - seq + 1);
 
             // read entries in batches
-            if ((rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num)) != LDB_OK)
-            {
-                if (rc == LDB_ERR_NOT_FOUND)
-                    break;
-                else {
-                    printf("\nError reading journal: %s\n", ldb_strerror(rc));
-                    break;
-                }
+            rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num);
+
+            if (rc != LDB_OK && rc != LDB_ERR_NOT_FOUND) {
+                printf("\nError reading journal: %s\n", ldb_strerror(rc));
+                break;
             }
 
-            // buffer exhausted: entries[num] contains next entry but data == NULL
-            if (num < want && entries[num].seqnum != 0 && entries[num].data == NULL)
+            for (size_t i = 0; i < num; i++)
+                print_entry("  ", entries + i);
+
+            if (num < want)
             {
+                // case: reached end of this journal
+                if (entries[num].seqnum == 0)
+                    break;
+
+                // case: buffer too short
                 char *ptr = NULL;
-                size_t need = (size_t) entries[num].data_len + 64;
+                size_t need = (size_t) entries[num].data_len + 32;
 
                 while (buf_len < need)
                     buf_len *= 2;
@@ -209,11 +213,8 @@ int run(ldb_journal_t *journal)
             }
 
             // set next seqnum to read
-            if (num != 0)
+            if (num > 0)
                 seq = entries[num - 1].seqnum + 1;
-
-            for (size_t i = 0; i < num; i++)
-                print_entry("  ", entries + i);
         }
     }
 
