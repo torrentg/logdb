@@ -201,7 +201,7 @@ static void print_journal_entry(FILE *out, const ldb_entry_t *entry)
         ret = retval; \
         if (msg) fprintf((retval == EXIT_SUCCESS ? stdout : stderr), "%s: " msg "\n", APP_NAME, ##__VA_ARGS__); \
         goto END_FUNCTION; \
-    } while(0)
+    } while (0)
 
 static int cmd_summary(const params_t *params)
 {

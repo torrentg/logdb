@@ -4,7 +4,19 @@ LDFLAGS= -lpthread
 
 TARGETS = tests example performance journalctl
 
-.PHONY: all clean coverage profiler valgrind helgrind cppcheck loc
+.PHONY: all clean coverage profiler valgrind helgrind cppcheck loc complexity
+
+SANITIZE ?=
+ifneq ($(SANITIZE),)
+	CFLAGS  += -fsanitize=address -fsanitize=undefined -fsanitize=float-cast-overflow -fsanitize-address-use-after-scope -fno-sanitize-recover -fno-omit-frame-pointer
+	LDFLAGS += -fsanitize=address -fsanitize=undefined
+endif
+
+SANITIZE_THREADS ?=
+ifneq ($(SANITIZE_THREADS),)
+	CFLAGS  += -fsanitize=thread -fno-omit-frame-pointer
+	LDFLAGS += -fsanitize=thread
+endif
 
 all: $(TARGETS)
 
@@ -44,7 +56,10 @@ cppcheck: journal.h journal.c
 loc:
 	cloc journal.h journal.c tests.c example.c performance.c journalctl.c
 
-clean: 
+complexity:
+	lizard -C 20 journal.c
+
+clean:
 	rm -f $(TARGETS)
 	rm -f *.dat *.idx *.tmp *.gcda *.gcno
 	rm -f tests-coverage

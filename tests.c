@@ -35,7 +35,7 @@ void append_entries(ldb_journal_t *journal, uint64_t seqnum1, uint64_t seqnum2)
 
 bool check_entry(const ldb_entry_t *entry, uint64_t seqnum, const char *data)
 {
-    return (entry && 
+    return (entry &&
             entry->seqnum == seqnum &&
             entry->data_len == (data == NULL ? 0 : strlen(data) + 1) &&
             (entry->data == data || (entry->data != NULL && data != NULL && strcmp(entry->data, data) == 0)));
@@ -77,11 +77,11 @@ void test_strerror(void)
     const char *unknown_error = ldb_strerror(-999);
     TEST_CHECK(unknown_error != NULL);
 
-    for (int i = 0; i < 23; i++) {
+    for (int i = 0; i < 28; i++) {
         TEST_CHECK(ldb_strerror(-i) != NULL);
         TEST_CHECK(strcmp(ldb_strerror(-i), unknown_error) != 0);
     }
-    for (int i = 23; i < 32; i++) {
+    for (int i = 28; i < 32; i++) {
         TEST_CHECK(ldb_strerror(-i) != NULL);
         TEST_CHECK(strcmp(ldb_strerror(-i), unknown_error) == 0);
     }
@@ -208,20 +208,19 @@ void test_close(void)
 }
 
 void test_open_invalid_args(void) {
-    ldb_journal_t journal = {0};
-    TEST_CHECK(ldb_open(NULL, "/tmp/", "test", 0) == LDB_ERR_ARG);      // no object
-    TEST_CHECK(ldb_open(&journal , NULL   , "test", 0) == LDB_ERR_ARG); // no path
-    TEST_CHECK(ldb_open(&journal , "/tmp/",  NULL , 0) == LDB_ERR_ARG); // no name
+    TEST_CHECK(ldb_open(NULL, "/tmp/", "test", 0) == LDB_ERR_ARG);  // no object
 }
 
 void test_open_invalid_path(void) {
     ldb_journal_t journal = {0};
+    TEST_CHECK(ldb_open(&journal, NULL   , "test", 0) == LDB_ERR_PATH);                 // no path
     TEST_CHECK(ldb_open(&journal, "/non_existent_path/", "test", 0) == LDB_ERR_PATH);   // non-existent dir
     TEST_CHECK(ldb_open(&journal, "/etc/passwd", "test", 0) == LDB_ERR_PATH);           // file instead of dir
 }
 
 void test_open_invalid_name(void) {
     ldb_journal_t journal = {0};
+    TEST_CHECK(ldb_open(&journal, "/tmp/",  NULL , 0) == LDB_ERR_NAME);
     TEST_CHECK(ldb_open(&journal, "/tmp/", "", 0) == LDB_ERR_NAME);
     TEST_CHECK(ldb_open(&journal, "/tmp/", ".", 0) == LDB_ERR_NAME);
     TEST_CHECK(ldb_open(&journal, "/tmp/", "xxx-3", 0) == LDB_ERR_NAME);
@@ -294,14 +293,14 @@ void test_open_invl_dat_header(void)
     // empty file
     fp = fopen("test.dat", "w");
     fclose(fp);
-    TEST_CHECK(ldb_open(&journal, "", "test", 0) == LDB_ERR_FMT_DAT);
+    TEST_CHECK(ldb_open(&journal, "", "test", 0) == LDB_ERR_INVL_DAT);
 
     // invalid magic numer
     fp = fopen("test.dat", "w");
     header.magic_number = 123;
     fwrite(&header, sizeof(ldb_header_dat_t), 1, fp);
     fclose(fp);
-    TEST_CHECK(ldb_open(&journal, "", "test", 0) == LDB_ERR_FMT_DAT);
+    TEST_CHECK(ldb_open(&journal, "", "test", 0) == LDB_ERR_INVL_DAT);
 
     // invalid file format
     fp = fopen("test.dat", "w");
@@ -309,7 +308,7 @@ void test_open_invl_dat_header(void)
     header.format = LDB_FILE_FORMAT + 1;
     fwrite(&header, sizeof(ldb_header_dat_t), 1, fp);
     fclose(fp);
-    TEST_CHECK(ldb_open(&journal, "", "test", 0) == LDB_ERR_FMT_DAT);
+    TEST_CHECK(ldb_open(&journal, "", "test", 0) == LDB_ERR_INVL_DAT);
 }
 
 void test_open_and_repair_1(void)
@@ -508,7 +507,7 @@ void _test_open_rollbacked_ok(int flags)
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
 
     // inserting 4 entries
-    for(int i = 10; i < 14; i++)
+    for (int i = 10; i < 14; i++)
     {
         record_dat.seqnum = i;
         record_dat.timestamp = 1000 + i;
@@ -587,7 +586,7 @@ void test_open_dat_check_fails(void)
 
     // open journal (idx removed to force rebuild from dat)
     remove("test.idx");
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CHECK) == LDB_ERR_FMT_DAT);
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CHECK) == LDB_ERR_CORRUPT_DAT);
 }
 
 void test_open_dat_corrupted(void)
@@ -645,7 +644,7 @@ void test_open_idx_check_fails_1(void)
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
 
     // inserting 4 entries
-    for(int i = 10; i < 14; i++)
+    for (int i = 10; i < 14; i++)
     {
         record_dat.seqnum = i;
         record_dat.timestamp = 1000 + i;
@@ -691,7 +690,7 @@ void test_open_idx_check_fails_2(void)
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
 
     // inserting 4 entries
-    for(int i = 10; i < 14; i++)
+    for (int i = 10; i < 14; i++)
     {
         record_dat.seqnum = i;
         record_dat.timestamp = 1000 + i;
@@ -1364,10 +1363,10 @@ void test_readonly_open(void)
     remove("test.idx");
 
     // cannot open non-existent journal in read-only (no CREATE)
-    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_ERR_FILE_NOT_FOUND);
+    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_ERR_NOFILE_DAT);
 
-    // cannot combine CREATE + READONLY
-    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_CREATE | LDB_OPEN_READONLY) == LDB_ERR_READONLY);
+    // open unexistent journal with CREATE + READONLY (read-only wins)
+    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_CREATE | LDB_OPEN_READONLY) == LDB_ERR_NOFILE_DAT);
 
     // create a journal with some data
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
@@ -1476,7 +1475,7 @@ void test_readonly_missing_idx(void)
 
     // remove the index file: read-only mode cannot rebuild it
     remove("test.idx");
-    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_ERR_READONLY);
+    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_ERR_NOFILE_IDX);
 
     remove("test.dat");
     remove("test.idx");

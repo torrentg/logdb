@@ -128,23 +128,28 @@ SOFTWARE.
 #define LDB_ERR_MEM               -3
 #define LDB_ERR_PATH              -4
 #define LDB_ERR_NAME              -5
-#define LDB_ERR_FILE_NOT_FOUND    -6
-#define LDB_ERR_READONLY          -7
-#define LDB_ERR_OPEN_DAT          -8
-#define LDB_ERR_READ_DAT          -9
-#define LDB_ERR_WRITE_DAT        -10
-#define LDB_ERR_OPEN_IDX         -11
-#define LDB_ERR_READ_IDX         -12
-#define LDB_ERR_WRITE_IDX        -13
-#define LDB_ERR_FMT_DAT          -14
-#define LDB_ERR_FMT_IDX          -15
-#define LDB_ERR_ENTRY_SEQNUM     -16
-#define LDB_ERR_ENTRY_TIMESTAMP  -17
-#define LDB_ERR_ENTRY_DATA       -18
-#define LDB_ERR_NOT_FOUND        -19
-#define LDB_ERR_TMP_FILE         -20
-#define LDB_ERR_CHECKSUM         -21
-#define LDB_ERR_LOCK             -22
+#define LDB_ERR_READONLY          -6
+#define LDB_ERR_NOFILE_DAT        -7
+#define LDB_ERR_NOFILE_IDX        -8
+#define LDB_ERR_INVL_DAT          -9
+#define LDB_ERR_INVL_IDX         -10
+#define LDB_ERR_CORRUPT_DAT      -11
+#define LDB_ERR_CORRUPT_IDX      -12
+#define LDB_ERR_CREATE_DAT       -13
+#define LDB_ERR_CREATE_IDX       -14
+#define LDB_ERR_OPEN_DAT         -15
+#define LDB_ERR_OPEN_IDX         -16
+#define LDB_ERR_READ_DAT         -17
+#define LDB_ERR_READ_IDX         -18
+#define LDB_ERR_WRITE_DAT        -19
+#define LDB_ERR_WRITE_IDX        -20
+#define LDB_ERR_ENTRY_SEQNUM     -21
+#define LDB_ERR_ENTRY_TIMESTAMP  -22
+#define LDB_ERR_ENTRY_DATA       -23
+#define LDB_ERR_NOT_FOUND        -24
+#define LDB_ERR_TMP_FILE         -25
+#define LDB_ERR_CHECKSUM         -26
+#define LDB_ERR_LOCK             -27
 
 #define LDB_OPEN_CREATE          (1 << 0)   // Create journal if it does not exist (default: false)
 #define LDB_OPEN_READONLY        (1 << 1)   // Open journal in read-only mode (default: false)
@@ -493,11 +498,11 @@ class journal_t
         return ldb_get_meta(m_journal, meta, len);
     }
 
-    int append(ldb_entry_t *entries, size_t len, size_t *num) { 
+    int append(ldb_entry_t *entries, size_t len, size_t *num) {
         return ldb_append(m_journal, entries, len, num);
     }
 
-    int read(uint64_t seqnum, ldb_entry_t *entries, size_t len, char *buf, size_t buf_len, size_t *num) { 
+    int read(uint64_t seqnum, ldb_entry_t *entries, size_t len, char *buf, size_t buf_len, size_t *num) {
         return ldb_read(m_journal, seqnum, entries, len, buf, buf_len, num);
     }
 

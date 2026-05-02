@@ -212,7 +212,7 @@ static void * run_write(void *args)
 
     while ( !interrupted &&
             results->rc == LDB_OK &&
-            results->time_ms < 1000 * params->max_seconds && 
+            results->time_ms < 1000 * params->max_seconds &&
             results->num_records < params->max_records &&
             results->num_bytes < params->max_bytes)
     {
@@ -228,7 +228,7 @@ static void * run_write(void *args)
         results->num_records += num;
         results->num_bytes += num * params->bytes_per_record;
 
-        while(true)
+        while (true)
         {
             results->time_ms = get_millis() - time0;
             if (results->time_ms >= 1000 * params->max_seconds)
@@ -311,7 +311,7 @@ static void * run_read(void *args)
 
     while ( !interrupted &&
             results->rc == LDB_OK &&
-            results->time_ms < 1000 * params->max_seconds && 
+            results->time_ms < 1000 * params->max_seconds &&
             results->num_records < params->max_records &&
             results->num_bytes < params->max_bytes)
     {
@@ -492,7 +492,7 @@ static void parse_args(int argc, char *argv[], params_journal_t *params_journal,
         if (curropt == -1)
             break;
 
-        switch(curropt)
+        switch (curropt)
         {
             case '?': // invalid option
                 fprintf(stderr, "use --help option for more information\n");
@@ -608,11 +608,11 @@ int main(int argc, char *argv[])
 
     pthread_t thread_write;
     args_write_t args_write = { .journal = journal, .params = params_write };
-    pthread_create(&thread_write, NULL, run_write, &args_write); 
+    pthread_create(&thread_write, NULL, run_write, &args_write);
 
     pthread_t thread_read;
     args_read_t args_read = { .journal = journal, .params = params_read };
-    pthread_create(&thread_read, NULL, run_read, &args_read); 
+    pthread_create(&thread_read, NULL, run_read, &args_read);
 
     pthread_join(thread_write, NULL);
     pthread_join(thread_read, NULL);
