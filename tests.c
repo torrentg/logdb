@@ -258,7 +258,7 @@ void test_open_empty(void)
     remove("test.idx");
 
     // create journal
-    ldb_create_file_dat("test.dat");
+    ldb_create_dat("test.dat");
 
     // open empty journal
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
@@ -328,7 +328,7 @@ void test_open_and_repair_1(void)
     ldb_close(&journal);
 
     // incomplete record is zeroized
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_REPAIR) == LDB_OK);
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     ldb_close(&journal);
 
     remove("test.dat");
@@ -345,7 +345,7 @@ void test_open_and_repair_1(void)
     ldb_close(&journal);
 
     // first entry zeroized
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_REPAIR) == LDB_OK);
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 0);
     ldb_close(&journal);
 }
@@ -384,7 +384,7 @@ void test_open_and_repair_2(void)
     ldb_close(&journal);
 
     // incomplete record is zeroized
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_REPAIR) == LDB_OK);
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.max_seqnum == 10);
 
     ldb_close(&journal);
@@ -422,7 +422,7 @@ void test_open_and_repair_3(void)
     ldb_close(&journal);
 
     // second record (incomplete) is zeroized
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_REPAIR) == LDB_OK);
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.max_seqnum == 10);
 
     ldb_close(&journal);
@@ -542,7 +542,9 @@ void _test_open_rollbacked_ok(int flags)
 }
 
 void test_open_rollbacked_ok_check(void) {
-    _test_open_rollbacked_ok(LDB_OPEN_CHECK | LDB_OPEN_REPAIR);
+    _test_open_rollbacked_ok(0);
+    // additionally verify ldb_check(repair=true) reports clean after auto-repair
+    TEST_ASSERT(ldb_check("", "test", true, NULL, NULL) == LDB_OK);
 }
 
 void test_open_rollbacked_ok_uncheck(void) {
@@ -584,9 +586,12 @@ void test_open_dat_check_fails(void)
 
     ldb_close(&journal);
 
-    // open journal (idx removed to force rebuild from dat)
-    remove("test.idx");
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CHECK) == LDB_ERR_CORRUPT_DAT);
+    // open journal (rebuild idx from dat: idx gets only seqnum=10 due to gap)
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    ldb_close(&journal);
+
+    // check detects the trailing seqnum=16 as dat corruption
+    TEST_ASSERT(ldb_check("", "test", false, NULL, NULL) == LDB_ERR);
 }
 
 void test_open_dat_corrupted(void)
@@ -624,9 +629,12 @@ void test_open_dat_corrupted(void)
 
     ldb_close(&journal);
 
-    // open journal (idx removed to force rebuild from dat)
-    remove("test.idx");
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CHECK) == LDB_ERR_CHECKSUM);
+    // open journal (rebuild idx from dat: idx gets only seqnum=10 due to bad checksum on seqnum=11)
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    ldb_close(&journal);
+
+    // check detects the trailing seqnum=11 with bad checksum
+    TEST_ASSERT(ldb_check("", "test", false, NULL, NULL) == LDB_ERR);
 }
 
 void test_open_idx_check_fails_1(void)
@@ -666,8 +674,11 @@ void test_open_idx_check_fails_1(void)
 
     ldb_close(&journal);
 
-    // open journal (finish OK due to idx rebuild)
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CHECK | LDB_OPEN_REPAIR) == LDB_OK);
+    // check+repair via ldb_check
+    TEST_ASSERT(ldb_check("", "test", true, NULL, NULL) == LDB_OK);
+
+    // verify journal state after repair
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
     TEST_CHECK(journal.state.min_timestamp == 1010);
     TEST_CHECK(journal.state.max_seqnum == 13);
@@ -712,8 +723,11 @@ void test_open_idx_check_fails_2(void)
 
     ldb_close(&journal);
 
-    // open journal (finish OK due to idx rebuild)
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CHECK | LDB_OPEN_REPAIR) == LDB_OK);
+    // check+repair via ldb_check
+    TEST_ASSERT(ldb_check("", "test", true, NULL, NULL) == LDB_OK);
+
+    // verify journal state after repair
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
     TEST_CHECK(journal.state.min_timestamp == 1010);
     TEST_CHECK(journal.state.max_seqnum == 13);

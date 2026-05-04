@@ -35,10 +35,10 @@ typedef struct journal_header_t {
 
 typedef enum mode_e {
     MODE_SUMMARY,
-    MODE_BULK,
+    MODE_CHECK,
     MODE_REPAIR,
-    MODE_PURGE,
     MODE_ROLLBACK,
+    MODE_PURGE
 } mode_e;
 
 typedef struct params_t {
@@ -46,12 +46,6 @@ typedef struct params_t {
     char path[PATH_MAX];
     char name[64];
     int flags;
-
-    // bulk
-    bool have_from;
-    bool have_to;
-    uint64_t from;
-    uint64_t to;
 
     // purge/rollback
     bool have_num;
@@ -63,25 +57,22 @@ typedef struct params_t {
 static void print_help(FILE *out)
 {
     fprintf(out,
-        "%s - journal maintenance tool\n"
+        APP_NAME" - journal maintenance tool\n"
         "\n"
         "Usage:\n"
-        "  %s -h\n"
-        "  %s [-c] FILE\n"
-        "  %s --bulk     [-c] [-f NUM] [-t NUM] FILE\n"
-        "  %s --repair   FILE\n"
-        "  %s --purge    (-n NUM | -s SEQ) FILE\n"
-        "  %s --rollback (-n NUM | -s SEQ) FILE\n"
+        "  " APP_NAME " -h\n"
+        "  " APP_NAME " FILE\n"
+        "  " APP_NAME " --check    FILE\n"
+        "  " APP_NAME " --repair   FILE\n"
+        "  " APP_NAME " --rollback (-n NUM | -s SEQ) FILE\n"
+        "  " APP_NAME " --purge    (-n NUM | -s SEQ) FILE\n"
         "\n"
         "Options:\n"
-        "      --bulk              List entries in a seqnum range\n"
-        "      --repair            Check and repair journal consistency\n"
-        "      --purge             Remove oldest entries (from start)\n"
-        "      --rollback          Remove newest entries (from end)\n"
         "  -h, --help              Show this help and exit\n"
-        "  -c, --check             Validate journal consistency when opening\n"
-        "  -f, --from=NUM          First seqnum (inclusive)\n"
-        "  -t, --to=NUM            Last seqnum (inclusive)\n"
+        "      --check             Validate journal consistency\n"
+        "      --repair            Check and repair journal consistency\n"
+        "      --rollback          Remove newest entries (from end)\n"
+        "      --purge             Remove oldest entries (from start)\n"
         "  -n, --num=NUM           Number of entries to remove\n"
         "  -s, --seq=SEQ           New boundary (purge keeps from SEQ; rollback keeps up to SEQ)\n"
         "\n"
@@ -90,8 +81,8 @@ static void print_help(FILE *out)
         "\n"
         "Exit codes:\n"
         "  0  Success\n"
-        "  1  Failure (invalid args, missing files, locked files, I/O errors, etc.)\n",
-        APP_NAME, APP_NAME, APP_NAME, APP_NAME, APP_NAME, APP_NAME, APP_NAME);
+        "  1  Failure (invalid args, missing files, locked files, I/O errors, etc.)\n"
+    );
 }
 
 static bool parse_u64(const char *s, uint64_t *out)
@@ -186,22 +177,18 @@ static void print_hexdump(FILE *out, const unsigned char *p, size_t len)
     }
 }
 
-static void print_journal_entry(FILE *out, const ldb_entry_t *entry)
-{
-    char ts[64] = {0};
-
-    format_timestamp(entry->timestamp, ts, sizeof(ts));
-
-    fprintf(out, "seqnum=%" PRIu64 ", timestamp=%s, data_len=%u\n", entry->seqnum, ts, entry->data_len);
-    print_hexdump(out, (const unsigned char *)entry->data, entry->data_len);
-}
-
 #define exit_function(retval, msg, ...) \
     do { \
         ret = retval; \
         if (msg) fprintf((retval == EXIT_SUCCESS ? stdout : stderr), "%s: " msg "\n", APP_NAME, ##__VA_ARGS__); \
         goto END_FUNCTION; \
     } while (0)
+
+static void check_report_cb(const char *msg, void *user_data)
+{
+    (void) user_data;
+    printf("%s\n", msg);
+}
 
 static int cmd_summary(const params_t *params)
 {
@@ -253,97 +240,6 @@ static int cmd_summary(const params_t *params)
     ret = EXIT_SUCCESS;
 
 END_FUNCTION:
-    ldb_close(journal);
-    ldb_free(journal);
-    return ret;
-}
-
-static int cmd_bulk(const params_t *params)
-{
-    int rc = 0;
-    int ret = EXIT_FAILURE;
-    ldb_stats_t stats = {0};
-    ldb_journal_t *journal = NULL;
-    ldb_entry_t entries[BATCH_ENTRIES] = {{0}};
-    char *buf = NULL;
-    size_t buf_len = 0;
-    uint64_t seq = 0UL;
-    uint64_t from_seq = 0UL;
-    uint64_t to_seq = 0UL;
-
-    if ((journal = ldb_alloc()) == NULL)
-        exit_function(EXIT_FAILURE, "%s", "out of memory");
-
-    if ((rc = ldb_open(journal, params->path, params->name, params->flags)) != LDB_OK)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
-
-    if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
-
-    if (stats.min_seqnum == 0)
-        exit_function(EXIT_SUCCESS, "%s", "(no entries)");
-
-    from_seq = (params->have_from ? params->from : stats.min_seqnum);
-    to_seq = (params->have_to ? params->to : stats.max_seqnum);
-
-    if (from_seq < stats.min_seqnum)
-        from_seq = stats.min_seqnum;
-    if (to_seq > stats.max_seqnum)
-        to_seq = stats.max_seqnum;
-
-    if (from_seq > to_seq)
-        exit_function(EXIT_FAILURE, "invalid range (%" PRIu64 " > %" PRIu64 ")", from_seq, to_seq);
-
-    if (to_seq < stats.min_seqnum || from_seq > stats.max_seqnum)
-        exit_function(EXIT_SUCCESS, "%s", "(no entries in range)");
-
-    buf_len = DEFAULT_BUF_SIZE;
-    if ((buf = (char *) malloc(buf_len)) == NULL)
-        exit_function(EXIT_FAILURE, "%s", "out of memory");
-
-    seq = from_seq;
-
-    while (seq <= to_seq)
-    {
-        size_t want = MIN(BATCH_ENTRIES, to_seq - seq + 1);
-        size_t num = 0;
-
-        rc = ldb_read(journal, seq, entries, want, buf, buf_len, &num);
-
-        if (rc != LDB_OK && rc != LDB_ERR_NOT_FOUND)
-            exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
-
-        for (size_t i = 0; i < num; i++)
-            print_journal_entry(stdout, &entries[i]);
-
-        if (num < want)
-        {
-            // case: reached end of this journal
-            if (entries[num].seqnum == 0)
-                break;
-
-            // case: buffer too short
-            char *ptr = NULL;
-            size_t need = (size_t) entries[num].data_len + 32;
-
-            while (buf_len < need)
-                buf_len *= BUF_GROWTH_FACTOR;
-
-            if ((ptr = (char *) realloc(buf, buf_len)) == NULL)
-                exit_function(EXIT_FAILURE, "%s", "out of memory");
-
-            buf = ptr;
-        }
-
-        // set next seqnum to read
-        if (num > 0)
-            seq = entries[num - 1].seqnum + 1;
-    }
-
-    ret = EXIT_SUCCESS;
-
-END_FUNCTION:
-    free(buf);
     ldb_close(journal);
     ldb_free(journal);
     return ret;
@@ -423,26 +319,13 @@ END_FUNCTION:
     return ret;
 }
 
-static int cmd_repair(const params_t *params)
+static int cmd_check(const params_t *params, bool repair)
 {
-    int rc = 0;
-    int ret = EXIT_FAILURE;
-    ldb_journal_t *journal = NULL;
+    int rc = ldb_check(params->path, params->name, repair, check_report_cb, NULL);
 
-    if ((journal = ldb_alloc()) == NULL)
-        exit_function(EXIT_FAILURE, "%s", "out of memory");
+    printf("%s\n", (rc == LDB_OK ? "Journal OK" : "Journal has issues"));
 
-    if ((rc = ldb_open(journal, params->path, params->name, params->flags)) != LDB_OK)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
-
-    printf("Journal OK\n");
-
-    ret = EXIT_SUCCESS;
-
-END_FUNCTION:
-    ldb_close(journal);
-    ldb_free(journal);
-    return ret;
+    return (rc == LDB_OK ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 
 static void parse_args(int argc, char **argv, params_t *params)
@@ -451,8 +334,7 @@ static void parse_args(int argc, char **argv, params_t *params)
 
     static struct option long_opts[] = {
         {"help",     no_argument,       0, 'h'},
-        {"check",    no_argument,       0, 'c'},
-        {"bulk",     no_argument,       0, 1001},
+        {"check",    no_argument,       0, 1001},
         {"repair",   no_argument,       0, 1002},
         {"purge",    no_argument,       0, 1003},
         {"rollback", no_argument,       0, 1004},
@@ -466,30 +348,13 @@ static void parse_args(int argc, char **argv, params_t *params)
     memset(params, 0x00, sizeof(*params));
     params->mode = MODE_SUMMARY;
 
-    while ((opt = getopt_long(argc, argv, "hcf:t:n:s:", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "hn:s:", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
             case 'h':
                 print_help(stdout);
                 exit(EXIT_SUCCESS);
-            case 'c':
-                params->flags |= LDB_OPEN_CHECK;
-                break;
-            case 'f':
-                if (!parse_u64(optarg, &params->from)) {
-                    fprintf(stderr, "%s: invalid --from\n", APP_NAME);
-                    exit(EXIT_FAILURE);
-                }
-                params->have_from = true;
-                break;
-            case 't':
-                if (!parse_u64(optarg, &params->to)) {
-                    fprintf(stderr, "%s: invalid --to\n", APP_NAME);
-                    exit(EXIT_FAILURE);
-                }
-                params->have_to = true;
-                break;
             case 'n':
                 if (!parse_u64(optarg, &params->num) || params->num == 0) {
                     fprintf(stderr, "%s: invalid --num\n", APP_NAME);
@@ -505,7 +370,7 @@ static void parse_args(int argc, char **argv, params_t *params)
                 params->have_seq = true;
                 break;
             case 1001:
-                params->mode = MODE_BULK;
+                params->mode = MODE_CHECK;
                 break;
             case 1002:
                 params->mode = MODE_REPAIR;
@@ -524,11 +389,10 @@ static void parse_args(int argc, char **argv, params_t *params)
     switch (params->mode)
     {
         case MODE_SUMMARY:
-        case MODE_BULK:
+        case MODE_CHECK:
             params->flags |= LDB_OPEN_READONLY;
             break;
         case MODE_REPAIR:
-            params->flags |= LDB_OPEN_CHECK | LDB_OPEN_REPAIR;
             break;
         case MODE_PURGE:
         case MODE_ROLLBACK:
@@ -581,14 +445,14 @@ int main(int argc, char **argv)
     {
         case MODE_SUMMARY:
             return cmd_summary(&params);
-        case MODE_BULK:
-            return cmd_bulk(&params);
+        case MODE_CHECK:
+            return cmd_check(&params, false);
         case MODE_REPAIR:
-            return cmd_repair(&params);
-        case MODE_PURGE:
-            return cmd_purge(&params);
+            return cmd_check(&params, true);
         case MODE_ROLLBACK:
             return cmd_rollback(&params);
+        case MODE_PURGE:
+            return cmd_purge(&params);
         default:
             break;
     }

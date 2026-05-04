@@ -153,9 +153,7 @@ SOFTWARE.
 
 #define LDB_OPEN_CREATE          (1 << 0)   // Create journal if it does not exist (default: false)
 #define LDB_OPEN_READONLY        (1 << 1)   // Open journal in read-only mode (default: false)
-#define LDB_OPEN_CHECK           (1 << 2)   // Check journal integrity (default: false)
-#define LDB_OPEN_REPAIR          (1 << 3)   // Repair journal if corrupted (default: false)
-#define LDB_OPEN_FSYNC           (1 << 4)   // Enable fsync after each write (default: false)
+#define LDB_OPEN_FSYNC           (1 << 2)   // Enable fsync after each write (default: false)
 
 #define LDB_DAT_MAGIC_NUMBER       0x74616478656C706EULL
 #define LDB_IDX_MAGIC_NUMBER       0x78646978656C706EULL
@@ -187,6 +185,14 @@ typedef struct ldb_stats_t {
     uint64_t min_timestamp;       // Minimum timestamp (0 means undefined).
     uint64_t max_timestamp;       // Maximum timestamp (0 means undefined).
 } ldb_stats_t;
+
+/**
+ * Callback type used by ldb_check() to report each issue found or repair action taken.
+ *
+ * @param[in] msg  Human-readable description of the issue or repair action.
+ * @param[in] data Opaque pointer passed through from ldb_check().
+ */
+typedef void (*ldb_check_cb)(const char *msg, void *data);
 
 /**
  * Returns ldb library version.
@@ -227,8 +233,8 @@ void ldb_free(ldb_journal_t *obj);
  * @param[in,out] obj Uninitialized the journal object.
  * @param[in] path Directory where journal files are located.
  * @param[in] name Journal name (allowed characters: [a-zA-Z0-9_], max length = 32).
- * @param[in] flags Open flags (0, LDB_OPEN_CREATE, LDB_OPEN_READONLY, LDB_OPEN_CHECK,
- *                  LDB_OPEN_REPAIR, LDB_OPEN_FSYNC, or combination of them).
+ * @param[in] flags Open flags (0, LDB_OPEN_CREATE, LDB_OPEN_READONLY, LDB_OPEN_FSYNC,
+ *                  or combination of them).
  * 
  * @return Error code (0 = OK). On error, the journal is closed properly (ldb_close not required).
  *         You can check the errno value to get additional error details.
@@ -426,11 +432,32 @@ long ldb_rollback(ldb_journal_t *obj, uint64_t seqnum);
  */
 long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
 
+/**
+ * Checks (and optionally repairs) the integrity of a journal.
+ *
+ * If repair is false the journal is opened read-only (no lock is acquired). 
+ * Otherwise the journal is opened in read-write mode with an exclusive lock.
+ *
+ * The callback cb (if not NULL) is invoked once for every issue detected and
+ * once for every repair action taken, with a human-readable description.
+ *
+ * @param[in] path   Directory where journal files are located.
+ * @param[in] name   Journal name.
+ * @param[in] repair If true, attempt to repair detected issues.
+ * @param[in] cb     Optional callback invoked for each issue/repair message.
+ * @param[in] data   Opaque pointer forwarded to cb.
+ *
+ * @return LDB_OK if the journal is consistent (or was successfully repaired),
+ *         or an error code describing the first issue found.
+ */
+int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, void *user_data);
+
 #ifdef __cplusplus
 }
 
 #include <stdexcept>
 #include <filesystem>
+#include <functional>
 
 namespace ldb {
 
@@ -520,6 +547,18 @@ class journal_t
 
     long purge(uint64_t seqnum) {
         return ldb_purge(m_journal, seqnum);
+    }
+
+    static int check(const std::filesystem::path &path, const std::string &name, bool repair, std::function<void(const char*)> cb = nullptr)
+    {
+        if (!cb)
+            return ldb_check(path.c_str(), name.c_str(), repair, nullptr, nullptr);
+
+        auto trampoline = [](const char *msg, void *data) noexcept {
+            (*static_cast<std::function<void(const char*)>*>(data))(msg);
+        };
+
+        return ldb_check(path.c_str(), name.c_str(), repair, trampoline, &cb);
     }
 
   private:
