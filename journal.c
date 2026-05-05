@@ -1302,8 +1302,8 @@ static int ldb_check_dat(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
         else if (ret == LDB_ERR_CHECKSUM)
         {
             has_issues = true;
-            notify(cb, user_data, "checksum mismatch at offset %zu, seqnum %lu", pos, record_dat.seqnum);
-            exit_function(LDB_ERR_CHECKSUM);
+            notify(cb, user_data, "checksum mismatch at offset %zu", pos);
+            goto_zeroize(pos);
         }
 
         if (prev_seqnum != 0 && record_dat.seqnum != prev_seqnum + 1)
@@ -1512,19 +1512,20 @@ static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
 
 ZEROIZE:
     if (ldb_is_zeroized(obj->idx_fp, pos))
-        exit_function(LDB_OK);
+        return LDB_OK;
 
-    has_issues = true;
     notify(cb, user_data, "index has trailing data at offset %zu", pos);
 
     if (repair)
     {
         if (!ldb_zeroize(obj->idx_fp, pos))
-            exit_function(LDB_ERR_WRITE_IDX);
+            return LDB_ERR;
 
         notify(cb, user_data, "%s", "index trailing data zeroized");
-        is_repaired = true;
+        return LDB_OK;
     }
+
+    return LDB_ERR;
 
 END_FUNCTION:
     if (has_issues && repair && !is_repaired)

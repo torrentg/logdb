@@ -441,6 +441,31 @@ long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
  * The callback cb (if not NULL) is invoked once for every issue detected and
  * once for every repair action taken, with a human-readable description.
  *
+ *   Data file issue                              Repairable
+ *   -------------------------------------------  ----------
+ *   File not found or cannot be opened           No
+ *   File locked by another process               Retry after closing external process
+ *   Invalid header (magic number or format)      No
+ *   Checksum mismatch in a record (+)            Yes (zeroed)
+ *   Non-consecutive sequence numbers             No
+ *   Non-monotonic timestamps                     No
+ *   Trailing data after last valid record        Yes (zeroed)
+ * 
+ * (+) The checksum covers both the record header and its data. 
+ *     If it does not match, the record is deemed invalid and 
+ *     everything from that point onward is zeroed out.
+ * 
+ *   Index file issue                             Repairable
+ *   -------------------------------------------  ----------
+ *   File not found or cannot be opened           No
+ *   File locked by another process               Retry after closing external process
+ *   Invalid header (magic number or format)      No
+ *   Sequence gap in index records                Yes (rebuilt)
+ *   Index entry position out of bounds           Yes (rebuilt)
+ *   Index seqnum/timestamp mismatch with dat     Yes (rebuilt)
+ *   Missing index records                        Yes (rebuilt)
+ *   Trailing data after last valid record        Yes (zeroed)
+ *
  * @param[in] path   Directory where journal files are located.
  * @param[in] name   Journal name.
  * @param[in] repair If true, attempt to repair detected issues.
@@ -448,7 +473,7 @@ long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
  * @param[in] data   Opaque pointer forwarded to cb.
  *
  * @return LDB_OK if the journal is consistent (or was successfully repaired),
- *         or an error code describing the first issue found.
+ *         LDB_ERR otherwise.
  */
 int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, void *user_data);
 
