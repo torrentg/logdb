@@ -8,7 +8,7 @@ tests
 tests-coverage
 example
 performance
-journalctl
+jtools
 coverage/
 .vscode/
 temp/

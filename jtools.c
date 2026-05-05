@@ -16,7 +16,7 @@
 #include <libgen.h>
 #include "journal.h"
 
-#define APP_NAME                "journalctl"
+#define APP_NAME                "jtools"
 #define EXT_DAT                 ".dat"
 #define BATCH_ENTRIES           1024
 #define DEFAULT_BUF_SIZE        (1024 * 1024)

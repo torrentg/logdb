@@ -2,7 +2,7 @@
 CFLAGS= -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Wnull-dereference -pthread
 LDFLAGS= -lpthread
 
-TARGETS = tests example performance journalctl
+TARGETS = tests example performance jtools
 
 .PHONY: all clean coverage profiler valgrind helgrind cppcheck loc complexity
 
@@ -29,8 +29,8 @@ example: example.c journal.h journal.c
 performance: performance.c journal.h journal.c
 	$(CC) -g $(CFLAGS) -O2 -o $@ performance.c journal.c $(LDFLAGS)
 
-journalctl: journalctl.c journal.h journal.c
-	$(CC) -g $(CFLAGS) -O2 -DUSE_DEFAULTS -o $@ journal.c journalctl.c $(LDFLAGS)
+jtools: jtools.c journal.h journal.c
+	$(CC) -g $(CFLAGS) -O2 -DUSE_DEFAULTS -o $@ journal.c jtools.c $(LDFLAGS)
 
 coverage: tests.c journal.h journal.c
 	$(CC) --coverage -O0 $(CFLAGS) -o tests-coverage tests.c -lgcov $(LDFLAGS)
@@ -54,7 +54,7 @@ cppcheck: journal.h journal.c
 	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=assertWithSideEffect --suppress=checkersReport journal.c
 
 loc:
-	cloc journal.h journal.c tests.c example.c performance.c journalctl.c
+	cloc journal.h journal.c tests.c example.c performance.c jtools.c
 
 complexity:
 	lizard -C 20 journal.c

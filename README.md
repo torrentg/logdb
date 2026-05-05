@@ -106,7 +106,7 @@ Read the function documentation in `journal.h`.<br/>
 See [`tests.c`](tests.c) for unit tests.<br/>
 See [`example.c`](example.c) for basic function usage.<br/>
 See [`performance.c`](performance.c) for concurrent usage.<br/>
-See [`journalctl.c`](journalctl.c) for a maintenance tool.
+See [`jtools.c`](jtools.c) for a maintenance tool.
 
 ## Contributors
 
