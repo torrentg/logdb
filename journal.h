@@ -42,9 +42,8 @@ SOFTWARE.
  * Main features:
  *   - Variable length record type
  *   - Records uniquely identified by a sequential number (seqnum)
- *   - Records are indexed by timestamp (monotonic non-decreasing field)
- *   - There are no other indexes other than seqnum and timestamp
- *   - Records can be appended, read, and searched
+ *   - There are no other indexes other than seqnum
+ *   - Records can be appended and read by seqnum
  *   - Records cannot be updated or deleted
  *   - Allows reverting the last entries (rollback)
  *   - Allows removing obsolete entries (purge)
@@ -63,10 +62,9 @@ SOFTWARE.
  * 
  *     header        record1          data1          record2       data2
  * ┌──────┴──────┐┌─────┴─────┐┌────────┴────────┐┌─────┴─────┐┌─────┴─────┐...
- *   magic number   seqnum1        raw bytes 1      seqnum2     raw bytes 2
- *   format         timestamp1                      timestamp2
- *   etc            checksum1                       checksum2
- *                  length1                         length2
+ *   magic number    seqnum1       raw bytes 1       seqnum2    raw bytes 2
+ *      format       length1                         length2
+ *     metadata      chksum1                         chksum2
  * 
  * idx file format
  * ---------------
@@ -79,9 +77,8 @@ SOFTWARE.
  * 
  *      header      record1       record2
  * ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐...
- *   magic number   seqnum1      seqnum2
- *   format         timestamp1   timestamp2
- *   etc            pos1         pos2
+ *   magic number    seqnum1      seqnum2
+ *      format       offset1      offset2
  * 
  * We can access directly any record by seqnum because:
  *  - we know the first seqnum in the file
@@ -89,8 +86,7 @@ SOFTWARE.
  *  - idx header has fixed size
  *  - all idx records have same size
  *
- * We use the binary search method over the index records to search data by timestamp.
- * In all cases, we rely on the system file caches to store data in memory.
+ * We rely on the system file caches to store data in memory.
  * 
  * Concurrency
  * ---------------
@@ -100,7 +96,7 @@ SOFTWARE.
  * File read ops are done with [dat|idx]_fd.
  * 
  * We use 2 mutex:
- *   - data mutex: Ensures data integrity ([first|last]_[seqnum|timestamp])
+ *   - data mutex: Ensures data integrity ([first|last]_seqnum)
  *                 Reduced scope (variables update)
  *   - file mutex: Ensures no reads are done during destructive writes
  *                 Extended scope (function execution)
@@ -115,7 +111,6 @@ SOFTWARE.
  *               └ close()        -       -     Destroy mutexes, close files
  *               ┌ stats()        R       R     
  * thread-read:  ┼ read()         R       R     
- *               └ search()       R       R     
  */
 
 #define LDB_VERSION_MAJOR          1
@@ -144,12 +139,11 @@ SOFTWARE.
 #define LDB_ERR_WRITE_DAT        -19
 #define LDB_ERR_WRITE_IDX        -20
 #define LDB_ERR_ENTRY_SEQNUM     -21
-#define LDB_ERR_ENTRY_TIMESTAMP  -22
-#define LDB_ERR_ENTRY_DATA       -23
-#define LDB_ERR_NOT_FOUND        -24
-#define LDB_ERR_TMP_FILE         -25
-#define LDB_ERR_CHECKSUM         -26
-#define LDB_ERR_LOCK             -27
+#define LDB_ERR_ENTRY_DATA       -22
+#define LDB_ERR_NOT_FOUND        -23
+#define LDB_ERR_TMP_FILE         -24
+#define LDB_ERR_CHECKSUM         -25
+#define LDB_ERR_LOCK             -26
 
 #define LDB_OPEN_CREATE          (1 << 0)   // Create journal if it does not exist (default: false)
 #define LDB_OPEN_READONLY        (1 << 1)   // Open journal in read-only mode (default: false)
@@ -157,7 +151,7 @@ SOFTWARE.
 
 #define LDB_DAT_MAGIC_NUMBER       0x74616478656C706EULL
 #define LDB_IDX_MAGIC_NUMBER       0x78646978656C706EULL
-#define LDB_FILE_FORMAT            2
+#define LDB_FILE_FORMAT            3
 #define LDB_METADATA_LEN          64
 
 #ifdef __cplusplus
@@ -167,14 +161,8 @@ extern "C" {
 struct ldb_impl_t;
 typedef struct ldb_impl_t ldb_journal_t;
 
-typedef enum ldb_search_e {
-    LDB_SEARCH_LOWER,             // Search for the first entry with a timestamp not less than the value.
-    LDB_SEARCH_UPPER              // Search for the first entry with a timestamp greater than the value.
-} ldb_search_e;
-
 typedef struct ldb_entry_t {
     uint64_t seqnum;              // Sequence number (0 = system assigned).
-    uint64_t timestamp;           // Timestamp (0 = system assigned).
     uint32_t data_len;            // Length of data (in bytes).
     void *data;                   // Pointer to data.
 } ldb_entry_t;
@@ -182,8 +170,6 @@ typedef struct ldb_entry_t {
 typedef struct ldb_stats_t {
     uint64_t min_seqnum;          // Minimum sequence number (0 means no entries).
     uint64_t max_seqnum;          // Maximum sequence number (0 means no entries).
-    uint64_t min_timestamp;       // Minimum timestamp (0 means undefined).
-    uint64_t max_timestamp;       // Maximum timestamp (0 means undefined).
 } ldb_stats_t;
 
 /**
@@ -275,14 +261,6 @@ int ldb_get_meta(ldb_journal_t *obj, char *meta, size_t len);
  * First entry can have any seqnum distinct from 0.
  * The rest of the entries must have consecutive values (no gaps).
  * 
- * Each entry has an associated timestamp (distinct from 0). 
- * If no timestamp value is provided (0 value), it is set to the current
- * time (milliseconds from epoch time). Otherwise, the meaning and units
- * of this field are user-defined. It is verified that the timestamp 
- * is equal to or greater than the timestamp of the preceding entry. 
- * It is legit for multiple records to have an identical timestamp 
- * because they were logged within the timestamp granularity.
- * 
  * This function is not 'atomic'. Entries are appended sequentially. 
  * On error (ex. disk full) written entries are flushed and remaining entries
  * are reported as not written (see num return argument).
@@ -290,10 +268,6 @@ int ldb_get_meta(ldb_journal_t *obj, char *meta, size_t len);
  * Seqnum values:
  *   - equals to 0 -> system assigns the sequential value.
  *   - distinct from 0 -> system checks that it is the next value.
- * 
- * Timestamp values:
- *   - equals to 0: system assigns the current UTC epoch time (in millis).
- *   - distinct from 0 -> system checks that it is greater than or equal to the previous timestamp.
  * 
  * File operations:
  *   - Data file is updated and flushed.
@@ -303,9 +277,8 @@ int ldb_get_meta(ldb_journal_t *obj, char *meta, size_t len);
  * 
  * @param[in] obj Journal to modify.
  * @param[in,out] entries Entries to append to the journal. Memory pointed 
- *                  to by each entry is not modified. Seqnum and timestamp
- *                  are updated if they have value 0.
- *                  User must reset pointers before reuse.
+ *                  to by each entry is not modified. Seqnum are updated if 
+ *                  they have value 0. 
  * @param[in] len Number of entries to append.
  * @param[out] num Number of entries appended (can be NULL).
  * 
@@ -384,20 +357,6 @@ int ldb_read(ldb_journal_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t l
 int ldb_stats(ldb_journal_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats);
 
 /**
- * Searches for the seqnum corresponding to the given timestamp.
- * 
- * Uses the binary search algorithm over the index file.
- * 
- * @param[in] obj Journal to use.
- * @param[in] ts Timestamp to search.
- * @param[in] mode Search mode.
- * @param[out] seqnum Resulting seqnum (distinct from NULL, 0 = NOT_FOUND).
- * 
- * @return Error code (0 = OK).
- */
-int ldb_search(ldb_journal_t *obj, uint64_t ts, ldb_search_e mode, uint64_t *seqnum);
-
-/**
  * Removes all entries greater than seqnum.
  * 
  * File operations:
@@ -448,7 +407,6 @@ long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
  *   Invalid header (magic number or format)      No
  *   Checksum mismatch in a record (+)            Yes (zeroed)
  *   Non-consecutive sequence numbers             No
- *   Non-monotonic timestamps                     No
  *   Trailing data after last valid record        Yes (zeroed)
  * 
  * (+) The checksum covers both the record header and its data. 
@@ -462,7 +420,7 @@ long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
  *   Invalid header (magic number or format)      No
  *   Sequence gap in index records                Yes (rebuilt)
  *   Index entry position out of bounds           Yes (rebuilt)
- *   Index seqnum/timestamp mismatch with dat     Yes (rebuilt)
+ *   Index seqnum mismatch with dat               Yes (rebuilt)
  *   Missing index records                        Yes (rebuilt)
  *   Trailing data after last valid record        Yes (zeroed)
  *
@@ -560,10 +518,6 @@ class journal_t
 
     int stats(uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats) {
         return ldb_stats(m_journal, seqnum1, seqnum2, stats);
-    }
-
-    int search(uint64_t ts, ldb_search_e mode, uint64_t *seqnum) {
-        return ldb_search(m_journal, ts, mode, seqnum);
     }
 
     long rollback(uint64_t seqnum) {

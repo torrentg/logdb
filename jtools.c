@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include <time.h>
 #include <stdio.h>
 #include <errno.h>
 #include <ctype.h>
@@ -45,13 +44,11 @@ typedef struct params_t {
     mode_e mode;
     char path[PATH_MAX];
     char name[64];
-    int flags;
-
-    // purge/rollback
     bool have_num;
     bool have_seq;
     uint64_t num;
     uint64_t seq;
+    int flags;
 } params_t;
 
 static void print_help(FILE *out)
@@ -75,9 +72,6 @@ static void print_help(FILE *out)
         "      --purge             Remove oldest entries (from start)\n"
         "  -n, --num=NUM           Number of entries to remove\n"
         "  -s, --seq=SEQ           New boundary (purge keeps from SEQ; rollback keeps up to SEQ)\n"
-        "\n"
-        "Environment:\n"
-        "  TZ                      Time zone used for displaying timestamps\n"
         "\n"
         "Exit codes:\n"
         "  0  Success\n"
@@ -106,37 +100,6 @@ static bool parse_u64(const char *s, uint64_t *out)
 
     *out = (uint64_t)v;
     return true;
-}
-
-static bool format_timestamp(uint64_t timestamp, char *out, size_t out_len)
-{
-    time_t sec = (time_t)(timestamp / 1000);
-    int ms = (int)(timestamp % 1000);
-    struct tm tmv = {0};
-    char suffix[16] = {0};
-    char base[32] = {0};
-    char zbuf[16] = {0};
-    int rc = 0;
-
-    if (!localtime_r(&sec, &tmv))
-        return false;
-
-    if (strftime(base, sizeof(base), "%Y-%m-%dT%H:%M:%S", &tmv) == 0)
-        return false;
-
-    if (strftime(zbuf, sizeof(zbuf), "%z", &tmv) != 0)
-    {
-        if (strcmp(zbuf, "+0000") == 0 || strcmp(zbuf, "-0000") == 0)   // set 'Z' for UTC
-            snprintf(suffix, sizeof(suffix), "Z");
-        else if (strlen(zbuf) == 5)                                     // convert +hhmm to +hh:mm
-            snprintf(suffix, sizeof(suffix), "%c%c%c:%c%c", zbuf[0], zbuf[1], zbuf[2], zbuf[3], zbuf[4]);
-        else
-            snprintf(suffix, sizeof(suffix), "%s", zbuf);
-    }
-
-    rc = snprintf(out, out_len, "%s.%03d%s", base, ms, suffix);
-
-    return (rc > 0 && (size_t)rc < out_len);
 }
 
 static void print_hexdump(FILE *out, const unsigned char *p, size_t len)
@@ -226,14 +189,8 @@ static int cmd_summary(const params_t *params)
         printf("Last entry:  (none)\n");
         printf("Number of entries: 0\n");
     } else {
-        char ts1[64] = {0};
-        char ts2[64] = {0};
-
-        format_timestamp(stats.min_timestamp, ts1, sizeof(ts1));
-        format_timestamp(stats.max_timestamp, ts2, sizeof(ts2));
-
-        printf("First entry: seqnum=%" PRIu64 ", timestamp=%s\n", stats.min_seqnum, ts1);
-        printf("Last entry:  seqnum=%" PRIu64 ", timestamp=%s\n", stats.max_seqnum, ts2);
+        printf("First entry: seqnum=%" PRIu64 "\n", stats.min_seqnum);
+        printf("Last entry:  seqnum=%" PRIu64 "\n", stats.max_seqnum);
         printf("Number of entries: %" PRIu64 "\n", stats.max_seqnum - stats.min_seqnum + 1);
     }
 
@@ -338,8 +295,6 @@ static void parse_args(int argc, char **argv, params_t *params)
         {"repair",   no_argument,       0, 1002},
         {"purge",    no_argument,       0, 1003},
         {"rollback", no_argument,       0, 1004},
-        {"from",     required_argument, 0, 'f'},
-        {"to",       required_argument, 0, 't'},
         {"num",      required_argument, 0, 'n'},
         {"seq",      required_argument, 0, 's'},
         {0, 0, 0, 0}
@@ -406,7 +361,8 @@ static void parse_args(int argc, char **argv, params_t *params)
     }
 
     if (optind >= argc) {
-        fprintf(stderr, "%s: FILE is required\n", APP_NAME);
+        fprintf(stderr, APP_NAME": FILE is required\n");
+        fprintf(stderr, "Try ‘" APP_NAME" -h’ for more information.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -438,8 +394,6 @@ int main(int argc, char **argv)
     params_t params;
 
     parse_args(argc, argv, &params);
-
-    tzset(); // Honor TZ environment variable
 
     switch (params.mode)
     {

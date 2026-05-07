@@ -216,10 +216,8 @@ static void * run_write(void *args)
             results->num_records < params->max_records &&
             results->num_bytes < params->max_bytes)
     {
-        for (size_t i = 0; i < num_entries; i++) {
+        for (size_t i = 0; i < num_entries; i++)
             entries[i].seqnum = 0;
-            entries[i].timestamp = 0;
-        }
 
         if ((results->rc = ldb_append(journal, entries, num_entries, &num)) != LDB_OK)
             break;

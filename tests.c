@@ -22,12 +22,8 @@ void append_entries(ldb_journal_t *journal, uint64_t seqnum1, uint64_t seqnum2)
     {
         snprintf(data, sizeof(data), "data-%d", (int) seqnum1);
 
-        // timestamp value equals seqnum to the ten
-        // examples: 9->0, 11->10, 19->10, 20->20, 321->320, etc.
-
         ldb_entry_t entry = {
             .seqnum = seqnum1,
-            .timestamp = (seqnum1 < 10 ? 1 : 0) + seqnum1 - (seqnum1 % 10),
             .data_len = (uint32_t) strlen(data) + 1,
             .data = data
         };
@@ -89,11 +85,11 @@ void test_strerror(void)
     const char *unknown_error = ldb_strerror(-999);
     TEST_CHECK(unknown_error != NULL);
 
-    for (int i = 0; i < 28; i++) {
+    for (int i = 0; i < 27; i++) {
         TEST_CHECK(ldb_strerror(-i) != NULL);
         TEST_CHECK(strcmp(ldb_strerror(-i), unknown_error) != 0);
     }
-    for (int i = 28; i < 32; i++) {
+    for (int i = 27; i < 32; i++) {
         TEST_CHECK(ldb_strerror(-i) != NULL);
         TEST_CHECK(strcmp(ldb_strerror(-i), unknown_error) == 0);
     }
@@ -106,11 +102,11 @@ void test_strerror(void)
 void test_sizeof(void)
 {
     TEST_CHECK(sizeof(ldb_header_dat_t) % sizeof(uintptr_t) == 0);
-    TEST_CHECK(sizeof(ldb_record_dat_t) == 24);
+    TEST_CHECK(sizeof(ldb_record_dat_t) == 16);
     TEST_CHECK(sizeof(ldb_header_idx_t) % sizeof(uintptr_t) == 0);
-    TEST_CHECK(sizeof(ldb_record_idx_t) == 24);
-    TEST_CHECK(sizeof(ldb_stats_t) == 32);
-    TEST_CHECK(sizeof(ldb_entry_t) == 32);
+    TEST_CHECK(sizeof(ldb_record_idx_t) == 16);
+    TEST_CHECK(sizeof(ldb_stats_t) == 16);
+    TEST_CHECK(sizeof(ldb_entry_t) == 24);
 }
 
 // Results validated using https://crccalc.com/
@@ -131,14 +127,6 @@ void test_crc32(void)
     size_t checksum = ldb_crc32(str11, strlen(str11), 0);
     checksum = ldb_crc32(str12, strlen(str12), checksum);
     TEST_CHECK(checksum == 0x0D4A1185);
-}
-
-void test_get_millis(void)
-{
-    uint64_t t0 = 1713331281361; // 17-apr-2024 05:21:21.361 (UTC)
-    uint64_t t1 = 2028864081361; // 17-apr-2034 05:21:21.361 (UTC)
-    TEST_CHECK(t0 < ldb_get_millis());
-    TEST_CHECK(ldb_get_millis() < t1);
 }
 
 void test_is_valid_path(void)
@@ -255,9 +243,7 @@ void test_open_create(void)
     TEST_CHECK(journal.dat_fp != NULL);
     TEST_CHECK(journal.idx_fp != NULL);
     TEST_CHECK(journal.state.min_seqnum == 0);
-    TEST_CHECK(journal.state.min_timestamp == 0);
     TEST_CHECK(journal.state.max_seqnum == 0);
-    TEST_CHECK(journal.state.max_timestamp == 0);
     TEST_CHECK(journal.dat_end == sizeof(ldb_header_dat_t));
     ldb_close(&journal);
 }
@@ -281,9 +267,7 @@ void test_open_empty(void)
     TEST_CHECK(journal.dat_fp != NULL);
     TEST_CHECK(journal.idx_fp != NULL);
     TEST_CHECK(journal.state.min_seqnum == 0);
-    TEST_CHECK(journal.state.min_timestamp == 0);
     TEST_CHECK(journal.state.max_seqnum == 0);
-    TEST_CHECK(journal.state.max_timestamp == 0);
     TEST_CHECK(journal.dat_end == sizeof(ldb_header_dat_t));
     ldb_close(&journal);
 }
@@ -351,7 +335,6 @@ void test_open_and_repair_1(void)
 
     // writing invalid first record
     record.seqnum = 1;
-    record.timestamp = 0;
     record.data_len = 1000;    // has data length but data not added after record
     fwrite(&record, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
     ldb_close(&journal);
@@ -376,7 +359,6 @@ void test_open_and_repair_2(void)
     const char data[32000] = {0};
     ldb_entry_t entry = {
         .seqnum = 10,
-        .timestamp = 3,
         .data_len = 21640,
         .data = (char *) data
     };
@@ -385,7 +367,6 @@ void test_open_and_repair_2(void)
     // inserting a partially zeroized entry
     ldb_record_dat_t record = {
         .seqnum = 0,
-        .timestamp = 0,
         .data_len = 400,
     };
     fwrite(&record, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
@@ -416,7 +397,6 @@ void test_open_and_repair_3(void)
     const char data[1024] = {0};
     ldb_entry_t entry = {
         .seqnum = 10,
-        .timestamp = 3,
         .data_len = 400,
         .data = (char *) data
     };
@@ -425,7 +405,6 @@ void test_open_and_repair_3(void)
     // inserting 1 'valid' entry with invalid data length
     ldb_record_dat_t record = {
         .seqnum = entry.seqnum + 1,
-        .timestamp = 3,
         .data_len = 400,
         .checksum = 999       // invalid but checked after data length
     };
@@ -454,7 +433,6 @@ void test_open_1_entry_ok(void)
     const char data[] = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
     ldb_entry_t entry = {
         .seqnum = 10,
-        .timestamp = 3,
         .data_len = (uint32_t) strlen(data),
         .data = (char *) data
     };
@@ -464,9 +442,7 @@ void test_open_1_entry_ok(void)
     // open journal with 1-entry (idx will be rebuild)
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.min_timestamp == 3);
     TEST_CHECK(journal.state.max_seqnum == 10);
-    TEST_CHECK(journal.state.max_timestamp == 3);
     TEST_CHECK(journal.dat_end == sizeof(ldb_header_dat_t) + sizeof(ldb_record_dat_t) + entry.data_len + ldb_padding(entry.data_len));
     ldb_close(&journal);
 
@@ -497,9 +473,7 @@ void test_open_1_entry_empty(void)
     // open journal with 1-entry (idx will be rebuild)
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 0);
-    TEST_CHECK(journal.state.min_timestamp == 0);
     TEST_CHECK(journal.state.max_seqnum == 0);
-    TEST_CHECK(journal.state.max_timestamp == 0);
     TEST_CHECK(journal.dat_end == sizeof(ldb_header_dat_t));
     ldb_close(&journal);
 }
@@ -522,13 +496,11 @@ void _test_open_rollbacked_ok(int flags)
     for (int i = 10; i < 14; i++)
     {
         record_dat.seqnum = i;
-        record_dat.timestamp = 1000 + i;
         record_dat.data_len = 20 + i;
         checksum = ldb_checksum_record(&record_dat);
         record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
 
         record_idx.seqnum = record_dat.seqnum;
-        record_idx.timestamp = record_dat.timestamp;
         record_idx.pos = ftell(journal.dat_fp);
 
         fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
@@ -547,9 +519,7 @@ void _test_open_rollbacked_ok(int flags)
     // open journal
     TEST_ASSERT(ldb_open(&journal, "", "test", flags) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.min_timestamp == 1010);
     TEST_CHECK(journal.state.max_seqnum == 13);
-    TEST_CHECK(journal.state.max_timestamp == 1013);
     ldb_close(&journal);
 }
 
@@ -578,7 +548,6 @@ void test_open_dat_check_fails(void)
 
     // inserting entry-1
     record_dat.seqnum = 10;
-    record_dat.timestamp = 10;
     record_dat.data_len = 20;
     checksum = ldb_checksum_record(&record_dat);
     record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
@@ -588,7 +557,6 @@ void test_open_dat_check_fails(void)
 
     // inserting entry-2 (broken sequence)
     record_dat.seqnum = 16;
-    record_dat.timestamp = 10;
     record_dat.data_len = 20;
     checksum = ldb_checksum_record(&record_dat);
     record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
@@ -621,7 +589,6 @@ void test_open_dat_corrupted(void)
 
     // inserting entry-1
     record_dat.seqnum = 10;
-    record_dat.timestamp = 10;
     record_dat.data_len = 20;
     checksum = ldb_checksum_record(&record_dat);
     record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
@@ -631,7 +598,6 @@ void test_open_dat_corrupted(void)
 
     // inserting entry-2 (incorrect checksum)
     record_dat.seqnum = 11;
-    record_dat.timestamp = 11;
     record_dat.data_len = 20;
     checksum = ldb_checksum_record(&record_dat);
     record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum) + 999;
@@ -667,14 +633,12 @@ void test_open_idx_check_fails_1(void)
     for (int i = 10; i < 14; i++)
     {
         record_dat.seqnum = i;
-        record_dat.timestamp = 1000 + i;
         record_dat.data_len = 20 + i;
         checksum = ldb_checksum_record(&record_dat);
         record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
 
         // corrupted index entry
         record_idx.seqnum = record_dat.seqnum + (i == 12 ? 5 : 0); // seqnum mismatch
-        record_idx.timestamp = record_dat.timestamp;
         record_idx.pos = ftell(journal.dat_fp);
 
         fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
@@ -692,9 +656,7 @@ void test_open_idx_check_fails_1(void)
     // verify journal state after repair
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.min_timestamp == 1010);
     TEST_CHECK(journal.state.max_seqnum == 13);
-    TEST_CHECK(journal.state.max_timestamp == 1013);
     ldb_close(&journal);
 }
 
@@ -716,14 +678,12 @@ void test_open_idx_check_fails_2(void)
     for (int i = 10; i < 14; i++)
     {
         record_dat.seqnum = i;
-        record_dat.timestamp = 1000 + i;
         record_dat.data_len = 20 + i;
         checksum = ldb_checksum_record(&record_dat);
         record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
 
         // corrupted index entry
         record_idx.seqnum = record_dat.seqnum;
-        record_idx.timestamp = record_dat.timestamp;
         record_idx.pos = ftell(journal.dat_fp) + (i == 12 ? 5 : 0); // invalid pos
 
         fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
@@ -741,9 +701,7 @@ void test_open_idx_check_fails_2(void)
     // verify journal state after repair
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.min_timestamp == 1010);
     TEST_CHECK(journal.state.max_seqnum == 13);
-    TEST_CHECK(journal.state.max_timestamp == 1013);
     ldb_close(&journal);
 }
 
@@ -774,9 +732,7 @@ void test_open_idx_missing_last_entry(void)
     // open journal (should detect unindexed entry and rebuild idx)
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.min_timestamp == 10);
     TEST_CHECK(journal.state.max_seqnum == 14);
-    TEST_CHECK(journal.state.max_timestamp == 10);
 
     // verify last entry is readable
     TEST_CHECK(ldb_read(&journal, 14, entries, 1, buf, sizeof(buf), &num) == LDB_OK);
@@ -839,7 +795,6 @@ void test_append_auto(void)
     // create entries
     for (size_t i = 0; i < len; i++) {
         entries[i].seqnum = 0;
-        entries[i].timestamp = 0;
         snprintf(buf, sizeof(buf), "data-%d", (int) i);
         entries[i].data = strdup(buf);
         entries[i].data_len = strlen(buf) + 1;
@@ -853,15 +808,12 @@ void test_append_auto(void)
     TEST_CHECK(entries[0].seqnum == 1);
     TEST_CHECK(entries[1].seqnum == 2);
     TEST_CHECK(entries[2].seqnum == 3);
-    TEST_CHECK(entries[0].timestamp > 0);
-    TEST_CHECK(entries[1].timestamp > 0);
-    TEST_CHECK(entries[2].timestamp > 0);
 
     // append 3 entries
     for (size_t i = 0; i < len; i++) {
         entries[i].seqnum = 0;
-        entries[i].timestamp = 0;
     }
+
     TEST_ASSERT(ldb_append(&journal, entries, len, &num) == LDB_OK);
     TEST_CHECK(num == len);
     TEST_CHECK(journal.state.min_seqnum == 1);
@@ -869,9 +821,6 @@ void test_append_auto(void)
     TEST_CHECK(entries[0].seqnum == 4);
     TEST_CHECK(entries[1].seqnum == 5);
     TEST_CHECK(entries[2].seqnum == 6);
-    TEST_CHECK(entries[0].timestamp > 0);
-    TEST_CHECK(entries[1].timestamp > 0);
-    TEST_CHECK(entries[2].timestamp > 0);
 
     ldb_close(&journal);
 
@@ -897,7 +846,6 @@ void test_append_nominal_case(void)
     // create entries
     for (size_t i = 0; i < len; i++) {
         entries[i].seqnum = 10 + i;
-        entries[i].timestamp = 10000 + i;
         snprintf(buf, sizeof(buf), "data-%d", (int) i);
         entries[i].data = strdup(buf);
         entries[i].data_len = strlen(buf) + 1;
@@ -932,7 +880,6 @@ void test_append_broken_sequence(void)
     // create entries
     for (size_t i = 0; i < len; i++) {
         entries[i].seqnum = 10 + i + (i == 5 ? 40 : 0);
-        entries[i].timestamp = 10000 + i;
         snprintf(buf, sizeof(buf), "data-%d", (int) i);
         entries[i].data = strdup(buf);
         entries[i].data_len = strlen(buf) + 1;
@@ -955,7 +902,6 @@ void test_append_lack_of_data(void)
     ldb_journal_t journal = {0};
     ldb_entry_t entry = {
         .seqnum = 10,
-        .timestamp = 1000,
         .data_len = 40,
         .data = NULL
     };
@@ -1051,13 +997,13 @@ void test_read_nominal_case(void)
     TEST_CHECK(ldb_read(&journal, 400, entries, 3, buf, sizeof(buf), &num) == LDB_ERR_NOT_FOUND);
     TEST_CHECK(num == 0);
 
+    // entry1 = 16 + 8 = 24, entry2 = 16 + 8 = 24
+
     // case0: buffer too small (read truncates 1st entry header)
-    // entry1 = 24 + 8 = 32, entry2 = 24 + 8 = 32
-    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 22, &num) == LDB_ERR_ARG);
+    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 15, &num) == LDB_ERR_ARG);
 
     // case1: buffer too small (read truncates 1st entry data)
-    // entry1 = 24 + 8 = 32, entry2 = 24 + 8 = 32
-    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 30, &num) == LDB_OK);
+    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 20, &num) == LDB_OK);
     TEST_CHECK(num == 0);
     TEST_CHECK(entries[0].seqnum == 20);
     TEST_CHECK(entries[0].data_len == 8);
@@ -1065,8 +1011,7 @@ void test_read_nominal_case(void)
     TEST_CHECK(entries[1].seqnum == 0);
 
     // case2: buffer too small (read truncates 2nd entry header)
-    // entry1 = 24 + 8 = 32, entry2 = 24 + 8 = 32
-    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 36, &num) == LDB_OK);
+    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 26, &num) == LDB_OK);
     TEST_CHECK(num == 0);
     TEST_CHECK(entries[0].seqnum == 20);
     TEST_CHECK(entries[0].data_len == 8);
@@ -1074,13 +1019,20 @@ void test_read_nominal_case(void)
     TEST_CHECK(entries[1].seqnum == 0);
 
     // case3: buffer too small (read truncates 2nd entry data)
-    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 58, &num) == LDB_OK);
+    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 46, &num) == LDB_OK);
     TEST_CHECK(num == 1);
     TEST_CHECK(check_entry(&entries[0], 20, "data-20"));
     TEST_CHECK(entries[1].seqnum == 21);
     TEST_CHECK(entries[1].data_len == 8);
     TEST_CHECK(entries[1].data == NULL);
     TEST_CHECK(entries[2].seqnum == 0);
+
+    // case4: buffer just enough for 3 entries
+    TEST_CHECK(ldb_read(&journal, 20, entries, 3, buf, 72, &num) == LDB_OK);
+    TEST_CHECK(num == 3);
+    TEST_CHECK(check_entry(&entries[0], 20, "data-20"));
+    TEST_CHECK(check_entry(&entries[1], 21, "data-21"));
+    TEST_CHECK(check_entry(&entries[2], 22, "data-22"));
 
     ldb_close(&journal);
 }
@@ -1127,79 +1079,6 @@ void test_stats_nominal_case(void)
     TEST_CHECK(ldb_stats(&journal, 100, 200, &stats) == LDB_OK);
     TEST_CHECK(stats.min_seqnum == 100);
     TEST_CHECK(stats.max_seqnum == 200);
-
-    ldb_close(&journal);
-}
-
-void test_search_invalid_args(void)
-{
-    ldb_journal_t journal = {0};
-    uint64_t seqnum = 0;
-
-    TEST_CHECK(ldb_search(NULL, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_ARG);      // NULL journal
-    TEST_CHECK(ldb_search(&journal, 1, LDB_SEARCH_LOWER, NULL) == LDB_ERR_ARG);     // NULL seqnum
-    TEST_CHECK(ldb_search(&journal, 1, (ldb_search_e)(9), &seqnum) == LDB_ERR_ARG); // invalid search type
-    TEST_CHECK(ldb_search(&journal, 1, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR);      // journal not open
-}
-
-void test_search_nominal_case(void)
-{
-    ldb_journal_t journal = {0};
-    uint64_t seqnum = 0;
-
-    remove("test.dat");
-    remove("test.idx");
-
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-
-    TEST_CHECK(ldb_search(&journal, 10, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
-
-    append_entries(&journal, 20, 314);
-
-    // LDB_SEARCH_LOWER
-    TEST_CHECK(ldb_search(&journal, 0, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 20);
-    TEST_CHECK(ldb_search(&journal, 10, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 20);
-    TEST_CHECK(ldb_search(&journal, 20, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 20);
-    TEST_CHECK(ldb_search(&journal, 25, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 30);
-    TEST_CHECK(ldb_search(&journal, 30, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 30);
-    TEST_CHECK(ldb_search(&journal, 295, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 300);
-    TEST_CHECK(ldb_search(&journal, 300, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 300);
-    TEST_CHECK(ldb_search(&journal, 305, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 310);
-    TEST_CHECK(ldb_search(&journal, 310, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 310);
-    TEST_CHECK(ldb_search(&journal, 311, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(ldb_search(&journal, 314, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(ldb_search(&journal, 999, LDB_SEARCH_LOWER, &seqnum) == LDB_ERR_NOT_FOUND);
-
-    // LDB_SEARCH_UPPER
-    TEST_CHECK(ldb_search(&journal, 0, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 20);
-    TEST_CHECK(ldb_search(&journal, 10, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 20);
-    TEST_CHECK(ldb_search(&journal, 20, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 30);
-    TEST_CHECK(ldb_search(&journal, 25, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 30);
-    TEST_CHECK(ldb_search(&journal, 30, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 40);
-    TEST_CHECK(ldb_search(&journal, 295, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 300);
-    TEST_CHECK(ldb_search(&journal, 300, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 310);
-    TEST_CHECK(ldb_search(&journal, 305, LDB_SEARCH_UPPER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 310);
-    TEST_CHECK(ldb_search(&journal, 310, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(ldb_search(&journal, 311, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(ldb_search(&journal, 314, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(ldb_search(&journal, 999, LDB_SEARCH_UPPER, &seqnum) == LDB_ERR_NOT_FOUND);
 
     ldb_close(&journal);
 }
@@ -1396,7 +1275,7 @@ void test_readonly_open(void)
 
     // create a journal with some data
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-    ldb_entry_t entry = { .seqnum = 1, .timestamp = 100, .data_len = 0, .data = NULL };
+    ldb_entry_t entry = { .seqnum = 1, .data_len = 0, .data = NULL };
     TEST_ASSERT(ldb_append(&journal, &entry, 1, NULL) == LDB_OK);
     ldb_close(&journal);
 
@@ -1423,9 +1302,9 @@ void test_readonly_write_ops(void)
     // create a journal with data
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
     ldb_entry_t entries[3] = {
-        { .seqnum = 1, .timestamp = 10, .data_len = 0, .data = NULL },
-        { .seqnum = 2, .timestamp = 20, .data_len = 0, .data = NULL },
-        { .seqnum = 3, .timestamp = 30, .data_len = 0, .data = NULL },
+        { .seqnum = 1, .data_len = 0, .data = NULL },
+        { .seqnum = 2, .data_len = 0, .data = NULL },
+        { .seqnum = 3, .data_len = 0, .data = NULL },
     };
     TEST_ASSERT(ldb_append(&journal, entries, 3, NULL) == LDB_OK);
     ldb_close(&journal);
@@ -1433,7 +1312,7 @@ void test_readonly_write_ops(void)
     // open read-only and try all write operations
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_OK);
 
-    ldb_entry_t new_entry = { .seqnum = 4, .timestamp = 40, .data_len = 0, .data = NULL };
+    ldb_entry_t new_entry = { .seqnum = 4, .data_len = 0, .data = NULL };
     TEST_CHECK(ldb_append(&journal, &new_entry, 1, NULL) == LDB_ERR_READONLY);
     TEST_CHECK(ldb_rollback(&journal, 2) == (long) LDB_ERR_READONLY);
     TEST_CHECK(ldb_purge(&journal, 2) == (long) LDB_ERR_READONLY);
@@ -1443,21 +1322,19 @@ void test_readonly_write_ops(void)
     TEST_CHECK(journal.state.min_seqnum == 1);
     TEST_CHECK(journal.state.max_seqnum == 3);
 
-    // read operations must work
+    // read operation must work
     ldb_entry_t read_entries[3];
     size_t num = 0;
     TEST_CHECK(ldb_read(&journal, 1, read_entries, 3, buf, sizeof(buf), &num) == LDB_OK);
     TEST_CHECK(num == 3);
 
-    uint64_t seqnum = 0;
-    TEST_CHECK(ldb_search(&journal, 20, LDB_SEARCH_LOWER, &seqnum) == LDB_OK);
-    TEST_CHECK(seqnum == 2);
-
+    // stat operation must work
     ldb_stats_t stats = {0};
     TEST_CHECK(ldb_stats(&journal, 1, 3, &stats) == LDB_OK);
     TEST_CHECK(stats.min_seqnum == 1);
     TEST_CHECK(stats.max_seqnum == 3);
 
+    // read meta must work
     TEST_CHECK(ldb_get_meta(&journal, meta, LDB_METADATA_LEN) == LDB_OK);
 
     ldb_close(&journal);
@@ -1495,7 +1372,7 @@ void test_readonly_missing_idx(void)
 
     // create a journal with data
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-    ldb_entry_t entry = { .seqnum = 1, .timestamp = 100, .data_len = 0, .data = NULL };
+    ldb_entry_t entry = { .seqnum = 1, .data_len = 0, .data = NULL };
     TEST_ASSERT(ldb_append(&journal, &entry, 1, NULL) == LDB_OK);
     ldb_close(&journal);
 
@@ -1739,12 +1616,10 @@ void test_check_dat_checksum_mismatch(void)
     append_entries(&journal, 10, 13);
     ldb_close(&journal);
 
-    // corrupt the stored checksum of record seqnum=12
-    // layout: header(80) + entry10(32) + entry11(32) + record12_header(24) → checksum at byte 164
-    //   ldb_record_dat_t: seqnum(8) + timestamp(8) + data_len(4) + checksum(4)
+    // corrupt the checksum of record with seqnum=12
     const size_t checksum_offset_12 = sizeof(ldb_header_dat_t)
-                                    + 2 * (sizeof(ldb_record_dat_t) + 8)  // two 32-byte entries before
-                                    + 20;                                  // offset of checksum within record
+                                    + 2 * (sizeof(ldb_record_dat_t) + 8)
+                                    + offsetof(ldb_record_dat_t, checksum);
 
     FILE *fp = fopen("test.dat", "r+b");
     TEST_ASSERT(fp != NULL);
@@ -1765,48 +1640,6 @@ void test_check_dat_checksum_mismatch(void)
     TEST_CHECK(journal.state.min_seqnum == 10);
     TEST_CHECK(journal.state.max_seqnum == 11);
     ldb_close(&journal);
-
-    remove("test.dat");
-    remove("test.idx");
-}
-
-void test_check_dat_timestamp_not_monotonic(void)
-{
-    ldb_journal_t journal = {0};
-    const char data[32] = {0};
-    ldb_record_dat_t record = {0};
-    uint32_t checksum = 0;
-
-    remove("test.dat");
-    remove("test.idx");
-
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-
-    // seqnum=1, ts=100
-    record.seqnum    = 1;
-    record.timestamp = 100;
-    record.data_len  = sizeof(data);
-    checksum = ldb_checksum_record(&record);
-    record.checksum  = ldb_crc32(data, record.data_len, checksum);
-    fwrite(&record, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
-    fwrite(data, record.data_len, 1, journal.dat_fp);
-    fwrite(data, ldb_padding(record.data_len), 1, journal.dat_fp);
-
-    // seqnum=2, ts=50 (lower than previous → not monotonic)
-    record.seqnum    = 2;
-    record.timestamp = 50;
-    record.data_len  = sizeof(data);
-    checksum = ldb_checksum_record(&record);
-    record.checksum  = ldb_crc32(data, record.data_len, checksum);
-    fwrite(&record, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
-    fwrite(data, record.data_len, 1, journal.dat_fp);
-    fwrite(data, ldb_padding(record.data_len), 1, journal.dat_fp);
-
-    ldb_close(&journal);
-
-    // not repairable in either mode
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR);
 
     remove("test.dat");
     remove("test.idx");
@@ -1898,23 +1731,22 @@ void test_check_idx_rebuilt(void)
     append_entries(&journal, 10, 14);
     ldb_close(&journal);
 
-    // corrupt the timestamp field of idx record seqnum=12
-    // idx layout: header(16) + record10(24) + record11(24) → record12 at byte 64
+    // corrupt the pos field of idx record seqnum=12
     const size_t pos_idx_12 = sizeof(ldb_header_idx_t) + 2 * sizeof(ldb_record_idx_t);
 
     FILE *fp = fopen("test.idx", "r+b");
     TEST_ASSERT(fp != NULL);
     fseek(fp, (long) pos_idx_12, SEEK_SET);
     fread(&record_idx, sizeof(ldb_record_idx_t), 1, fp);
-    record_idx.timestamp = 0xDEADBEEFULL;  // wrong timestamp
+    record_idx.pos = 0xDEADBEEFULL;  // wrong pos
     fseek(fp, (long) pos_idx_12, SEEK_SET);
     fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, fp);
     fclose(fp);
 
-    // no repair → error
+    // no repair -> error
     TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR);
 
-    // repair → idx rebuilt from dat
+    // repair -> idx rebuilt from dat
     TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
     TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
 
@@ -1967,7 +1799,6 @@ TEST_LIST = {
     { "crc32()",                      test_crc32 },
     { "version()",                    test_version },
     { "strerror()",                   test_strerror },
-    { "get_millis()",                 test_get_millis },
     { "is_valid_path()",              test_is_valid_path },
     { "is_valid_name()",              test_is_valid_name },
     { "create_filename()",            test_create_filename },
@@ -2001,8 +1832,6 @@ TEST_LIST = {
     { "read() nominal case",          test_read_nominal_case },
     { "stats() invalid args",         test_stats_invalid_args },
     { "stats() nominal case",         test_stats_nominal_case },
-    { "search() invalid args",        test_search_invalid_args },
-    { "search() nominal case",        test_search_nominal_case },
     { "rollback() invalid args",      test_rollback_invalid_args },
     { "rollback() nominal case",      test_rollback_nominal_case },
     { "purge() invalid args",         test_purge_invalid_args },
@@ -2025,7 +1854,6 @@ TEST_LIST = {
     { "check() dat invalid header",   test_check_dat_invalid_header },
     { "check() dat trailing data",    test_check_dat_trailing_data },
     { "check() dat checksum mismatch", test_check_dat_checksum_mismatch },
-    { "check() dat timestamp not monotonic", test_check_dat_timestamp_not_monotonic },
     { "check() idx invalid header",   test_check_idx_invalid_header },
     { "check() idx trailing data",    test_check_idx_trailing_data },
     { "check() idx rebuilt",          test_check_idx_rebuilt },

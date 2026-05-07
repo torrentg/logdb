@@ -10,9 +10,8 @@ Main features:
 
 * Variable length record type
 * Records uniquely identified by a sequential number (seqnum)
-* Records are indexed by timestamp (monotonic non-decreasing field)
-* There are no other indexes other than seqnum and timestamp
-* Records can be appended, read, and searched
+* There are no other indexes other than seqnum
+* Records can be appended and read by seqnum
 * Records cannot be updated or deleted
 * Allows reverting the last entries (rollback)
 * Allows removing obsolete entries (purge)
@@ -29,12 +28,11 @@ Files copied to a machine with different endianness may not be readable.
 ### dat file format
 
 ```txt
-     header       record1          data1          record2       data2
+    header        record1          data1          record2       data2
 ┌──────┴──────┐┌─────┴─────┐┌────────┴────────┐┌─────┴─────┐┌─────┴─────┐...
-  magic number   seqnum1        raw bytes 1      seqnum2     raw bytes 2
-  format         timestamp1                      timestamp2
-  metadata       checksum1                       checksum2
-                 length1                         length2
+  magic number    seqnum1       raw bytes 1       seqnum2    raw bytes 2
+     format       length1                         length2
+    metadata      chksum1                         chksum2
 ```
 
 ### idx file format
@@ -42,9 +40,8 @@ Files copied to a machine with different endianness may not be readable.
 ```txt
      header      record1       record2
 ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐...
-  magic number   seqnum1      seqnum2
-  format         timestamp1   timestamp2
-                 pos1         pos2
+  magic number    seqnum1      seqnum2
+     format       offset1      offset2
 ```
 
 ## Usage
