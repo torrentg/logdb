@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include "journal.h"
@@ -25,7 +26,7 @@ ldb_entry_t create_random_entry(size_t seqnum) {
 }
 
 void print_entry(const char *prefix, const ldb_entry_t *entry) {
-    printf("%s{ seqnum=%zu, data='%.*s' }\n", 
+    printf("%s{ seqnum=%lu, data='%.*s' }\n", 
             prefix,
             entry->seqnum,
             entry->data_len, 
@@ -46,7 +47,7 @@ void print_result(const char *fmt, int rc, ...)
 
 int run(ldb_journal_t *journal)
 {
-    ldb_stats_t stats = {0};
+    ldb_range_t range = {0};
     ldb_entry_t entries[MAX_ENTRIES] = {{0}};
     ldb_entry_t entry = {0};
     size_t buf_len = 1024;
@@ -65,7 +66,7 @@ int run(ldb_journal_t *journal)
     rc = ldb_open(journal, "", "example", LDB_OPEN_CREATE);
     print_result("open", rc);
 
-    rc = ldb_set_meta(journal, "format=1.6", 16);
+    rc = ldb_set_meta(journal, "format=1.6", strlen("format=1.6"));
     print_result("set metadata", rc);
 
     rc = ldb_get_meta(journal, buf, LDB_METADATA_LEN);
@@ -104,14 +105,8 @@ int run(ldb_journal_t *journal)
     rc = ldb_read(journal, 1010, entries, MAX_ENTRIES, buf, buf_len, &num);
     print_result("read %d entries starting at 1010 (read-entries=%zu)", rc, MAX_ENTRIES, num);
 
-    rc = ldb_stats(journal, 0, 9999, &stats);
-    print_result("stats range [0-9999]", rc);
-
-    rc = ldb_stats(journal, 1005, 1011, &stats);
-    print_result("stats range [1005-1011]", rc);
-
-    rc = ldb_stats(journal, 0, 100, &stats);
-    print_result("stats range [0-100]", rc);
+    range = ldb_get_range(journal);
+    print_result("get range = [%lu,%lu]", 0, range.min_seqnum, range.max_seqnum);
 
     rc = ldb_rollback(journal, 9999);
     print_result("rollback to seqnum=9999 (removed-entries=%zu)", rc, rc);
@@ -123,26 +118,23 @@ int run(ldb_journal_t *journal)
     print_result("purge up to seqnum=1003 (removed-entries=%zu from bottom)", rc, rc);
 
     rc = ldb_close(journal);
-    print_result("close", rc, rc);
+    print_result("close journal", rc);
 
     // open existing journal
     rc = ldb_open(journal, "", "example", 0);
+    print_result("open existing journal", rc);
 
     printf("\njournal content:\n");
-    rc = ldb_stats(journal, 0, UINT64_MAX, &stats);
+    range = ldb_get_range(journal);
 
-    if (rc == LDB_ERR_NOT_FOUND)
-    {
-        printf("\nError getting stats: %s\n", ldb_strerror(rc));
-    }
-    else if (stats.min_seqnum == 0)
+    if (range.min_seqnum == 0)
     {
         printf("  (no entries)\n");
     }
     else
     {
-        uint64_t seq = stats.min_seqnum;
-        uint64_t to_seq = stats.max_seqnum;
+        uint64_t seq = range.min_seqnum;
+        uint64_t to_seq = range.max_seqnum;
 
         while (seq <= to_seq)
         {
@@ -186,7 +178,7 @@ int run(ldb_journal_t *journal)
         }
     }
 
-    rc = ldb_close(journal);
+    ldb_close(journal);
 
     free(buf);
 

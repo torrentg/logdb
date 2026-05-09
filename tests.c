@@ -104,8 +104,8 @@ void test_sizeof(void)
     TEST_CHECK(sizeof(ldb_header_dat_t) % sizeof(uintptr_t) == 0);
     TEST_CHECK(sizeof(ldb_record_dat_t) == 16);
     TEST_CHECK(sizeof(ldb_header_idx_t) % sizeof(uintptr_t) == 0);
-    TEST_CHECK(sizeof(ldb_record_idx_t) == 16);
-    TEST_CHECK(sizeof(ldb_stats_t) == 16);
+    TEST_CHECK(sizeof(ldb_record_idx_t) == 8);
+    TEST_CHECK(sizeof(ldb_range_t) == 16);
     TEST_CHECK(sizeof(ldb_entry_t) == 24);
 }
 
@@ -500,7 +500,6 @@ void _test_open_rollbacked_ok(int flags)
         checksum = ldb_checksum_record(&record_dat);
         record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
 
-        record_idx.seqnum = record_dat.seqnum;
         record_idx.pos = ftell(journal.dat_fp);
 
         fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
@@ -508,6 +507,13 @@ void _test_open_rollbacked_ok(int flags)
         fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
 
         fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, journal.idx_fp);
+
+        // set first_seqnum in idx header for the first entry
+        if (i == 10)
+        {
+            uint64_t first_seqnum = 10;
+            pwrite(fileno(journal.idx_fp), &first_seqnum, sizeof(first_seqnum), offsetof(ldb_header_idx_t, first_seqnum));
+        }
     }
 
     // inserting rollbacked info
@@ -637,15 +643,24 @@ void test_open_idx_check_fails_1(void)
         checksum = ldb_checksum_record(&record_dat);
         record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
 
-        // corrupted index entry
-        record_idx.seqnum = record_dat.seqnum + (i == 12 ? 5 : 0); // seqnum mismatch
         record_idx.pos = ftell(journal.dat_fp);
+
+        // corrupting index entry
+        if (i == 12)
+            record_idx.pos += 5;
 
         fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
         fwrite(data, record_dat.data_len, 1, journal.dat_fp);
         fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
 
         fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, journal.idx_fp);
+
+        // set first_seqnum in idx header for the first entry
+        if (i == 10)
+        {
+            uint64_t first_seqnum = 10;
+            pwrite(fileno(journal.idx_fp), &first_seqnum, sizeof(first_seqnum), offsetof(ldb_header_idx_t, first_seqnum));
+        }
     }
 
     ldb_close(&journal);
@@ -683,7 +698,6 @@ void test_open_idx_check_fails_2(void)
         record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
 
         // corrupted index entry
-        record_idx.seqnum = record_dat.seqnum;
         record_idx.pos = ftell(journal.dat_fp) + (i == 12 ? 5 : 0); // invalid pos
 
         fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
@@ -691,6 +705,13 @@ void test_open_idx_check_fails_2(void)
         fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
 
         fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, journal.idx_fp);
+
+        // set first_seqnum in idx header for the first entry
+        if (i == 10)
+        {
+            uint64_t first_seqnum = 10;
+            pwrite(fileno(journal.idx_fp), &first_seqnum, sizeof(first_seqnum), offsetof(ldb_header_idx_t, first_seqnum));
+        }
     }
 
     ldb_close(&journal);
@@ -1037,48 +1058,32 @@ void test_read_nominal_case(void)
     ldb_close(&journal);
 }
 
-void test_stats_invalid_args(void)
+void test_range_all(void)
 {
     ldb_journal_t journal = {0};
-    ldb_stats_t stats = {0};
-
-    TEST_CHECK(ldb_stats(NULL, 1, 1000, &stats) == LDB_ERR_ARG);    // NULL journal
-    TEST_CHECK(ldb_stats(&journal, 1, 1000, NULL) == LDB_ERR_ARG);  // NULL stats
-    TEST_CHECK(ldb_stats(&journal, 99, 1, &stats) == LDB_ERR_ARG);  // invalid range
-    TEST_CHECK(ldb_stats(&journal, 1, 1000, &stats) == LDB_ERR);    // journal not open
-}
-
-void test_stats_nominal_case(void)
-{
-    ldb_journal_t journal = {0};
-    ldb_stats_t stats = {0};
+    ldb_range_t range = {0};
 
     remove("test.dat");
     remove("test.idx");
 
+    // non-valid journal
+    range = ldb_get_range(NULL);
+    TEST_CHECK(range.min_seqnum == UINT64_MAX);
+    TEST_CHECK(range.max_seqnum == UINT64_MAX);
+
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-    TEST_CHECK(ldb_stats(&journal, 3, 5, &stats) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(ldb_stats(&journal, 0, UINT64_MAX, &stats) == LDB_OK);
-    TEST_CHECK(stats.min_seqnum == 0);
-    TEST_CHECK(stats.max_seqnum == 0);
+
+    // empty journal
+    range = ldb_get_range(&journal);
+    TEST_CHECK(range.min_seqnum == 0);
+    TEST_CHECK(range.max_seqnum == 0);
 
     append_entries(&journal, 20, 314);
-
-    TEST_CHECK(ldb_stats(&journal, 10, 15, &stats) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(stats.min_seqnum == 0);
-    TEST_CHECK(stats.max_seqnum == 0);
-
-    TEST_CHECK(ldb_stats(&journal, 900, 1000, &stats) == LDB_ERR_NOT_FOUND);
-    TEST_CHECK(stats.min_seqnum == 0);
-    TEST_CHECK(stats.max_seqnum == 0);
-
-    TEST_CHECK(ldb_stats(&journal, 0, 10000000, &stats) == LDB_OK);
-    TEST_CHECK(stats.min_seqnum == 20);
-    TEST_CHECK(stats.max_seqnum == 314);
-
-    TEST_CHECK(ldb_stats(&journal, 100, 200, &stats) == LDB_OK);
-    TEST_CHECK(stats.min_seqnum == 100);
-    TEST_CHECK(stats.max_seqnum == 200);
+    
+    // non-empty journal
+    range = ldb_get_range(&journal);
+    TEST_CHECK(range.min_seqnum == 20);
+    TEST_CHECK(range.max_seqnum == 314);
 
     ldb_close(&journal);
 }
@@ -1328,11 +1333,10 @@ void test_readonly_write_ops(void)
     TEST_CHECK(ldb_read(&journal, 1, read_entries, 3, buf, sizeof(buf), &num) == LDB_OK);
     TEST_CHECK(num == 3);
 
-    // stat operation must work
-    ldb_stats_t stats = {0};
-    TEST_CHECK(ldb_stats(&journal, 1, 3, &stats) == LDB_OK);
-    TEST_CHECK(stats.min_seqnum == 1);
-    TEST_CHECK(stats.max_seqnum == 3);
+    // get_range operation must work
+    ldb_range_t range = ldb_get_range(&journal);
+    TEST_CHECK(range.min_seqnum == 1);
+    TEST_CHECK(range.max_seqnum == 3);
 
     // read meta must work
     TEST_CHECK(ldb_get_meta(&journal, meta, LDB_METADATA_LEN) == LDB_OK);
@@ -1830,8 +1834,7 @@ TEST_LIST = {
     { "read() invalid args",          test_read_invalid_args },
     { "read() empty journal",         test_read_empty },
     { "read() nominal case",          test_read_nominal_case },
-    { "stats() invalid args",         test_stats_invalid_args },
-    { "stats() nominal case",         test_stats_nominal_case },
+    { "range() all",                  test_range_all },
     { "rollback() invalid args",      test_rollback_invalid_args },
     { "rollback() nominal case",      test_rollback_nominal_case },
     { "purge() invalid args",         test_purge_invalid_args },

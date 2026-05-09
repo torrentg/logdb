@@ -157,7 +157,7 @@ static int cmd_summary(const params_t *params)
 {
     int rc = 0;
     int ret = EXIT_FAILURE;
-    ldb_stats_t stats = {0};
+    ldb_range_t range = {0};
     ldb_journal_t *journal = NULL;
     struct stat stat_dat = {0};
     struct stat stat_idx = {0};
@@ -181,17 +181,16 @@ static int cmd_summary(const params_t *params)
     printf("Metadata: \n");
     print_hexdump(stdout, (const unsigned char *)meta, sizeof(meta));
 
-    if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+    range = ldb_get_range(journal);
 
-    if (stats.min_seqnum == 0) {
+    if (range.min_seqnum == 0) {
         printf("First entry: (none)\n");
         printf("Last entry:  (none)\n");
         printf("Number of entries: 0\n");
     } else {
-        printf("First entry: seqnum=%" PRIu64 "\n", stats.min_seqnum);
-        printf("Last entry:  seqnum=%" PRIu64 "\n", stats.max_seqnum);
-        printf("Number of entries: %" PRIu64 "\n", stats.max_seqnum - stats.min_seqnum + 1);
+        printf("First entry: seqnum=%" PRIu64 "\n", range.min_seqnum);
+        printf("Last entry:  seqnum=%" PRIu64 "\n", range.max_seqnum);
+        printf("Number of entries: %" PRIu64 "\n", range.max_seqnum - range.min_seqnum + 1);
     }
 
     ret = EXIT_SUCCESS;
@@ -206,7 +205,7 @@ static int cmd_purge(const params_t *params)
 {
     int rc = 0;
     int ret = EXIT_FAILURE;
-    ldb_stats_t stats = {0};
+    ldb_range_t range = {0};
     ldb_journal_t *journal = NULL;
     uint64_t seq = 0UL;
 
@@ -218,13 +217,12 @@ static int cmd_purge(const params_t *params)
     if ((rc = ldb_open(journal, params->path, params->name, params->flags)) != LDB_OK)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
-    if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+    range = ldb_get_range(journal);
 
-    if (stats.min_seqnum == 0)
+    if (range.min_seqnum == 0)
         exit_function(EXIT_SUCCESS, "%s", "(no entries)");
 
-    seq = (params->have_num ? stats.min_seqnum + params->num : params->seq);
+    seq = (params->have_num ? range.min_seqnum + params->num : params->seq);
 
     if ((rc = (int) ldb_purge(journal, seq)) < 0)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
@@ -243,7 +241,7 @@ static int cmd_rollback(const params_t *params)
 {
     int rc = 0;
     int ret = EXIT_FAILURE;
-    ldb_stats_t stats = {0};
+    ldb_range_t range = {0};
     ldb_journal_t *journal = NULL;
     uint64_t seq = 0UL;
 
@@ -255,13 +253,12 @@ static int cmd_rollback(const params_t *params)
     if ((rc = ldb_open(journal, params->path, params->name, params->flags)) != LDB_OK)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
-    if ((rc = ldb_stats(journal, 0, UINT64_MAX, &stats)) != LDB_OK)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+    range = ldb_get_range(journal);
 
-    if (stats.min_seqnum == 0)
+    if (range.min_seqnum == 0)
         exit_function(EXIT_SUCCESS, "%s", "(no entries)");
 
-    seq = (params->have_num ? (stats.max_seqnum >= params->num ? stats.max_seqnum - params->num : 0) : params->seq);
+    seq = (params->have_num ? (range.max_seqnum >= params->num ? range.max_seqnum - params->num : 0) : params->seq);
 
     if ((rc = (int) ldb_rollback(journal, seq)) < 0)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
@@ -379,10 +376,13 @@ static void parse_args(int argc, char **argv, params_t *params)
         exit(EXIT_FAILURE);
     }
 
-    strncpy(params->path, filepath, sizeof(params->path) - 1);
-    dirname(params->path);
-
     char tmp[PATH_MAX] = {0};
+
+    // setting journal path
+    strncpy(tmp, filepath, PATH_MAX - 1);
+    strncpy(params->path, dirname(tmp), sizeof(params->path) - 1);
+
+    // setting journal name
     strncpy(tmp, filepath, PATH_MAX - 1);
     char *base = basename(tmp);
     base[strlen(base) - 4] = '\0';

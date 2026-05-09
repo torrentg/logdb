@@ -40,8 +40,9 @@ Files copied to a machine with different endianness may not be readable.
 ```txt
      header      record1       record2
 ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐...
-  magic number    seqnum1      seqnum2
-     format       offset1      offset2
+  magic number    offset1      offset2
+     format
+     seqnum1
 ```
 
 ## Usage
@@ -55,7 +56,7 @@ Drop [`journal.h`](journal.h) and [`journal.c`](journal.c) into your project and
 
 ldb_journal_t *journal = NULL;
 ldb_entry_t entries[MAX_ENTRIES] = {{0}};
-ldb_stats_t stats = {0};
+ldb_range_t range = {0};
 char buf[10 * 1024];
 size_t num = 0;
 int rc = 0;
@@ -72,12 +73,12 @@ if (rc != LDB_OK)
 
 ...
 
-ldb_stats(journal, 0, UINT64_MAX, &stats);
+range = ldb_get_range(journal);
 
-print("Min seqnum = %zu\n", stats.min_seqnum);
-print("Max seqnum = %zu\n", stats.max_seqnum);
+print("Min seqnum = %zu\n", range.min_seqnum);
+print("Max seqnum = %zu\n", range.max_seqnum);
 
-rc = ldb_read(journal, stats.min_seqnum, entries, MAX_ENTRIES, buf, sizeof(buf), &num);
+rc = ldb_read(journal, range.min_seqnum, entries, MAX_ENTRIES, buf, sizeof(buf), &num);
 
 if (rc == LDB_OK)
 {

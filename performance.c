@@ -157,7 +157,7 @@ static int msleep(long msec)
     return res;
 }
 
-static void print_results_write(results_write_t *results)
+static void print_results_write(const results_write_t *results)
 {
     double seconds = (double) results->time_ms / 1000.0;
     printf("write - result         = %s\n", ldb_strerror(results->rc));
@@ -172,7 +172,7 @@ static void print_results_write(results_write_t *results)
     printf("write - idle time (%%)  = %d%%\n", (int)(100.0 * (double) results->idle_ms / (double) results->time_ms));
 }
 
-static void print_results_read(results_read_t *results)
+static void print_results_read(const results_read_t *results)
 {
     double seconds = results->time_ms / 1000.0;
     printf("read  - result         = %s\n", ldb_strerror(results->rc));
@@ -198,6 +198,13 @@ static void * run_write(void *args)
     ldb_entry_t *entries = calloc(num_entries, sizeof(ldb_entry_t));
     uint64_t time0 = get_millis();
     size_t num = 0;
+
+    if (data == NULL || entries == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        free(data);
+        free(entries);
+        return NULL;
+    }
 
     // Journal supports records of variable length.
     // In this case we use fixed-length records filled with 0's
@@ -300,9 +307,15 @@ static void * run_read(void *args)
     ldb_entry_t *entries = calloc(num_entries, sizeof(ldb_entry_t));
     buffer_t buffer = {.length = 0, .data = NULL};
     uint64_t time0 = get_millis();
-    ldb_stats_t stats = {0};
+    ldb_range_t range = {0};
     uint64_t seqnum = 0;
     size_t num = 0;
+
+    if (entries == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        free(entries);
+        return NULL;
+    }
 
     *results = (results_read_t){0};
     results->rc = LDB_OK;
@@ -313,18 +326,17 @@ static void * run_read(void *args)
             results->num_records < params->max_records &&
             results->num_bytes < params->max_bytes)
     {
-        if ((results->rc = ldb_stats(journal, 0, SIZE_MAX, &stats)) != LDB_OK)
-            break;
+        range = ldb_get_range(journal);
 
-        if (stats.min_seqnum == 0) {
+        if (range.min_seqnum == 0) {
             msleep(1);
             results->time_ms = get_millis() - time0;
             results->idle_ms++;
             continue;
         }
 
-        num = stats.max_seqnum - stats.min_seqnum + 1;
-        seqnum = stats.min_seqnum + rand() % num;
+        num = range.max_seqnum - range.min_seqnum + 1;
+        seqnum = range.min_seqnum + rand() % num;
 
         if ((results->rc = read_entries(journal, seqnum, seqnum + num_entries - 1, entries, num_entries, &buffer, results)) != LDB_OK)
             break;

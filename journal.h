@@ -77,8 +77,9 @@ SOFTWARE.
  * 
  *      header      record1       record2
  * ┌──────┴──────┐┌─────┴─────┐┌─────┴─────┐...
- *   magic number    seqnum1      seqnum2
- *      format       offset1      offset2
+ *   magic number    offset1      offset2
+ *      format
+ *      seqnum1
  * 
  * We can access directly any record by seqnum because:
  *  - we know the first seqnum in the file
@@ -109,7 +110,7 @@ SOFTWARE.
  * thread-write: ┼ rollback()     W       W     
  *               ├ purge()        W       W     
  *               └ close()        -       -     Destroy mutexes, close files
- *               ┌ stats()        R       R     
+ *               ┌ range()        R       R     
  * thread-read:  ┼ read()         R       R     
  */
 
@@ -167,10 +168,10 @@ typedef struct ldb_entry_t {
     void *data;                   // Pointer to data.
 } ldb_entry_t;
 
-typedef struct ldb_stats_t {
+typedef struct ldb_range_t {
     uint64_t min_seqnum;          // Minimum sequence number (0 means no entries).
     uint64_t max_seqnum;          // Maximum sequence number (0 means no entries).
-} ldb_stats_t;
+} ldb_range_t;
 
 /**
  * Callback type used by ldb_check() to report each issue found or repair action taken.
@@ -255,6 +256,17 @@ int ldb_set_meta(ldb_journal_t *obj, const char *meta, size_t len);
 int ldb_get_meta(ldb_journal_t *obj, char *meta, size_t len);
 
 /**
+ * Returns the range of sequence numbers available in the journal.
+ * 
+ * @param[in] obj Journal to use.
+ * 
+ * @return The range of sequence numbers available in the journal, or
+ *         {0, 0} if no entries are available, or
+ *         {UINT64_MAX, UINT64_MAX} if the journal is invalid.
+ */
+ldb_range_t ldb_get_range(ldb_journal_t *obj);
+
+/**
  * Appends entries to the journal.
  * 
  * Entries are identified by their seqnum. 
@@ -325,36 +337,6 @@ int ldb_append(ldb_journal_t *obj, ldb_entry_t *entries, size_t len, size_t *num
  * @return Error code (0 = OK).
  */
 int ldb_read(ldb_journal_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t len, char *buf, size_t buf_len, size_t *num);
-
-/**
- * Return statistics between seqnum1 and seqnum2 (both included).
- * 
- * The requested range [seqnum1, seqnum2] is clamped to the intersection with
- * the available journal data [min_seqnum, max_seqnum]:
- *   - If the ranges do not intersect: returns LDB_ERR_NOT_FOUND (empty result).
- *   - If the ranges partially intersect: stats are computed for the clamped range.
- *   - If the ranges fully overlap: stats are computed for all requested data.
- * 
- * Examples: (assuming that the journal has entries [10, 100])
- *   - Request [0, UINT64_MAX] -> clamped to [10, 100]
- *   - Request [20, 90]        -> clamped to [20, 90]
- *   - Request [5, 50]         -> clamped to [10, 50]
- *   - Request [50, 200]       -> clamped to [50, 100]
- *   - Request [5, 9]          -> returns LDB_ERR_NOT_FOUND
- *   - Request [101, 200]      -> returns LDB_ERR_NOT_FOUND
- *
- * Examples: (assuming that the journal is empty)
- *   - Request [0, 3]          -> clamped to [0, 0]
- *   - Request [3, 5]          -> LDB_ERR_NOT_FOUND
- * 
- * @param[in] obj Journal to use.
- * @param[in] seqnum1 First sequence number.
- * @param[in] seqnum2 Second sequence number (greater than or equal to seqnum1).
- * @param[out] stats Uninitialized statistics.
- * 
- * @return Error code (0 = OK).
- */
-int ldb_stats(ldb_journal_t *obj, uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats);
 
 /**
  * Removes all entries greater than seqnum.
@@ -508,16 +490,17 @@ class journal_t
         return ldb_get_meta(m_journal, meta, len);
     }
 
+    std::pair<uint64_t, uint64_t> get_range() {
+        ldb_range_t range = ldb_get_range(m_journal);
+        return {range.min_seqnum, range.max_seqnum};
+    }
+
     int append(ldb_entry_t *entries, size_t len, size_t *num) {
         return ldb_append(m_journal, entries, len, num);
     }
 
     int read(uint64_t seqnum, ldb_entry_t *entries, size_t len, char *buf, size_t buf_len, size_t *num) {
         return ldb_read(m_journal, seqnum, entries, len, buf, buf_len, num);
-    }
-
-    int stats(uint64_t seqnum1, uint64_t seqnum2, ldb_stats_t *stats) {
-        return ldb_stats(m_journal, seqnum1, seqnum2, stats);
     }
 
     long rollback(uint64_t seqnum) {
