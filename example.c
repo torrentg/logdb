@@ -114,9 +114,6 @@ int run(ldb_journal_t *journal)
     rc = ldb_rollback(journal, 1010);
     print_result("rollback to seqnum=1010 (removed-entries=%zu from top)", rc, rc);
 
-    rc = ldb_purge(journal, 1003);
-    print_result("purge up to seqnum=1003 (removed-entries=%zu from bottom)", rc, rc);
-
     rc = ldb_close(journal);
     print_result("close journal", rc);
 

@@ -37,7 +37,6 @@ typedef enum mode_e {
     MODE_CHECK,
     MODE_REPAIR,
     MODE_ROLLBACK,
-    MODE_PURGE,
     MODE_SPLIT
 } mode_e;
 
@@ -63,7 +62,6 @@ static void print_help(FILE *out)
         "  " APP_NAME " --check    FILE\n"
         "  " APP_NAME " --repair   FILE\n"
         "  " APP_NAME " --rollback (-n NUM | -s SEQ) FILE\n"
-        "  " APP_NAME " --purge    (-n NUM | -s SEQ) FILE\n"
         "  " APP_NAME " --split    (-n NUM | -s SEQ) FILE\n"
         "\n"
         "Options:\n"
@@ -71,7 +69,6 @@ static void print_help(FILE *out)
         "      --check             Check journal consistency\n"
         "      --repair            Repair journal inconsistencies\n"
         "      --rollback          Remove newest entries (from the end)\n"
-        "      --purge             Remove oldest entries (from the start)\n"
         "      --split             Split journal into two\n"
         "  -n, --num=NUM           Number of entries to remove/keep\n"
         "  -s, --seq=SEQ           Boundary sequence number\n"
@@ -204,42 +201,6 @@ END_FUNCTION:
     return ret;
 }
 
-static int cmd_purge(const params_t *params)
-{
-    int rc = 0;
-    int ret = EXIT_FAILURE;
-    ldb_range_t range = {0};
-    ldb_journal_t *journal = NULL;
-    uint64_t seq = 0UL;
-
-    assert(params->have_num != params->have_seq);
-
-    if ((journal = ldb_alloc()) == NULL)
-        exit_function(EXIT_FAILURE, "%s", "out of memory");
-
-    if ((rc = ldb_open(journal, params->path, params->name, params->flags)) != LDB_OK)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
-
-    range = ldb_get_range(journal);
-
-    if (range.min_seqnum == 0)
-        exit_function(EXIT_SUCCESS, "%s", "(no entries)");
-
-    seq = (params->have_num ? range.min_seqnum + params->num : params->seq);
-
-    if ((rc = (int) ldb_purge(journal, seq)) < 0)
-        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
-
-    printf("Removed entries: %d\n", rc);
-
-    ret = EXIT_SUCCESS;
-
-END_FUNCTION:
-    ldb_close(journal);
-    ldb_free(journal);
-    return ret;
-}
-
 static int cmd_rollback(const params_t *params)
 {
     int rc = 0;
@@ -345,9 +306,8 @@ static void parse_args(int argc, char **argv, params_t *params)
         {"help",     no_argument,       0, 'h'},
         {"check",    no_argument,       0, 1001},
         {"repair",   no_argument,       0, 1002},
-        {"purge",    no_argument,       0, 1003},
-        {"rollback", no_argument,       0, 1004},
-        {"split",    no_argument,       0, 1005},
+        {"rollback", no_argument,       0, 1003},
+        {"split",    no_argument,       0, 1004},
         {"num",      required_argument, 0, 'n'},
         {"seq",      required_argument, 0, 's'},
         {0, 0, 0, 0}
@@ -384,12 +344,9 @@ static void parse_args(int argc, char **argv, params_t *params)
                 params->mode = MODE_REPAIR;
                 break;
             case 1003:
-                params->mode = MODE_PURGE;
-                break;
-            case 1004:
                 params->mode = MODE_ROLLBACK;
                 break;
-            case 1005:
+            case 1004:
                 params->mode = MODE_SPLIT;
                 break;
             default:
@@ -405,7 +362,6 @@ static void parse_args(int argc, char **argv, params_t *params)
             break;
         case MODE_REPAIR:
             break;
-        case MODE_PURGE:
         case MODE_ROLLBACK:
         case MODE_SPLIT:
             if (params->have_num == params->have_seq) {
@@ -465,8 +421,6 @@ int main(int argc, char **argv)
             return cmd_check(&params, true);
         case MODE_ROLLBACK:
             return cmd_rollback(&params);
-        case MODE_PURGE:
-            return cmd_purge(&params);
         case MODE_SPLIT:
             return cmd_split(&params);
         default:

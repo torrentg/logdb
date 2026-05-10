@@ -14,11 +14,15 @@ Main features:
 * Records can be appended and read by seqnum
 * Records cannot be updated or deleted
 * Allows reverting the last entries (rollback)
-* Allows removing obsolete entries (purge)
 * Supports read-write concurrency (multi-thread)
 * Automatic data recovery in case of catastrophic events
 * Minimal memory footprint
 * No dependencies
+
+Operation modes:
+
+* Online: concurrent read/write access to the journal by multiple threads.
+* Offline: maintenance operations (check, repair, split).
 
 ## File format
 

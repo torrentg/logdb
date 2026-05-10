@@ -23,7 +23,6 @@
 
 #define LDB_EXT_DAT             ".dat"
 #define LDB_EXT_IDX             ".idx"
-#define LDB_EXT_TMP             ".tmp"
 #define LDB_PATH_SEPARATOR      "/"
 #define LDB_NAME_MAX_LENGTH     32
 
@@ -196,7 +195,6 @@ const char * ldb_strerror(int errnum)
         case LDB_ERR_ENTRY_SEQNUM:      return "Broken sequence";
         case LDB_ERR_ENTRY_DATA:        return "Data not found";
         case LDB_ERR_NOT_FOUND:         return "No results";
-        case LDB_ERR_TMP_FILE:          return "Error creating temp file";
         case LDB_ERR_CHECKSUM:          return "Checksum mismatch";
         case LDB_ERR_LOCK:              return "Error locking file";
         default:                        return "Unknown error";
@@ -1314,7 +1312,7 @@ ZEROIZE:
     }
 
 END_FUNCTION:
-    return (has_issues ? (is_repaired ? LDB_OK : LDB_ERR) : LDB_OK);
+    return (has_issues ? (is_repaired ? LDB_OK : ret) : LDB_OK);
 }
 
 /**
@@ -1468,13 +1466,13 @@ ZEROIZE:
     if (repair)
     {
         if (!ldb_zeroize(obj->idx_fp, pos))
-            return LDB_ERR;
+            return LDB_ERR_WRITE_IDX;
 
         notify(cb, user_data, "%s", "index trailing data zeroized");
         return LDB_OK;
     }
 
-    return LDB_ERR;
+    return LDB_ERR_CORRUPT_IDX;
 
 END_FUNCTION:
     if (has_issues && repair && !is_repaired)
@@ -1488,7 +1486,7 @@ END_FUNCTION:
         }
     }
 
-    return (has_issues ? (is_repaired ? LDB_OK : LDB_ERR) : LDB_OK);
+    return (has_issues ? (is_repaired ? LDB_OK : ret) : LDB_OK);
 }
 
 int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, void *user_data)
@@ -1998,142 +1996,6 @@ long ldb_rollback(ldb_impl_t *obj, uint64_t seqnum)
     ret = removed_entries;
 
 END_FUNCTION:
-    pthread_mutex_unlock(&obj->mutex_files);
-    return ret;
-}
-
-long ldb_purge(ldb_impl_t *obj, uint64_t seqnum)
-{
-    if (!obj)
-        return LDB_ERR_ARG;
-
-    if (obj->read_only)
-        return LDB_ERR_READONLY;
-
-    pthread_mutex_lock(&obj->mutex_files);
-    pthread_mutex_lock(&obj->mutex_state);
-
-    ssize_t rc = 0;
-    int ret = LDB_ERR;
-    long removed_entries = 0;
-    ldb_header_dat_t header_dat = {0};
-    ldb_record_idx_t record_idx = {0};
-    ldb_record_dat_t record_dat = {0};
-    char *tmp_path = NULL;
-    FILE *tmp_fp = NULL;
-    int dat_fd = -1;
-    int idx_fd = -1;
-    size_t pos = 0;
-
-    if (!ldb_is_valid_obj(obj))
-        exit_function(LDB_ERR);
-
-    // case no entries to purge
-    if (seqnum <= obj->state.min_seqnum || obj->state.min_seqnum == 0) {
-        pthread_mutex_unlock(&obj->mutex_state);
-        pthread_mutex_unlock(&obj->mutex_files);
-        return 0;
-    }
-
-    dat_fd = fileno(obj->dat_fp);
-    idx_fd = fileno(obj->idx_fp);
-
-    // case purge all entries
-    if (obj->state.max_seqnum < seqnum)
-    {
-        removed_entries = (long) obj->state.max_seqnum - (long) obj->state.min_seqnum + 1;
-
-        ldb_close_files(obj);
-        ldb_reset_state(&obj->state);
-
-        remove(obj->dat_path);
-        remove(obj->idx_path);
-
-        if (!ldb_create_dat(obj->dat_path))
-            exit_function(LDB_ERR_CREATE_DAT);
-
-        if ((ret = ldb_open_dat(obj)) != LDB_OK)
-            exit_function(ret);
-
-        if ((ret = ldb_rebuild_idx(obj)) != LDB_OK)
-            exit_function(ret);
-
-        pthread_mutex_unlock(&obj->mutex_state);
-        pthread_mutex_unlock(&obj->mutex_files);
-
-        return removed_entries;
-    }
-
-    // case purge some entries
-
-    removed_entries = (long) seqnum - (long) obj->state.min_seqnum;
-
-    rc = pread(dat_fd, &header_dat, sizeof(ldb_header_dat_t), 0);
-
-    if (rc == -1)
-        exit_function(LDB_ERR_READ_DAT);
-
-    if (rc != (ssize_t) sizeof(ldb_header_dat_t))
-        exit_function(LDB_ERR_CORRUPT_DAT);
-
-    if ((ret = ldb_read_record_idx(idx_fd, &obj->state, seqnum, &record_idx)) != LDB_OK)
-        exit_function(ret);
-
-    pos = record_idx.pos;
-
-    if ((ret = ldb_read_record_dat(dat_fd, pos, &record_dat, true)) != LDB_OK)
-        exit_function(ret);
-
-    if (record_dat.seqnum != seqnum)
-        exit_function(LDB_ERR_CORRUPT_DAT);
-
-    if ((tmp_path = ldb_create_filename(obj->path, obj->name, LDB_EXT_TMP)) == NULL)
-        exit_function(LDB_ERR_MEM);
-
-    if ((tmp_fp = fopen(tmp_path, "w")) == NULL)
-        exit_function(LDB_ERR_TMP_FILE);
-
-    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, tmp_fp) != 1)
-        exit_function(LDB_ERR_TMP_FILE);
-
-    if (!ldb_copy_file(obj->dat_fp, pos, obj->dat_end, tmp_fp, sizeof(ldb_header_dat_t)))
-        exit_function(LDB_ERR_TMP_FILE);
-
-    if (fclose(tmp_fp) != 0)
-        exit_function(LDB_ERR_TMP_FILE);
-
-    tmp_fp = NULL;
-
-    if ((ret = ldb_close_files(obj)) != LDB_OK)
-        exit_function(ret);
-
-    ldb_reset_state(&obj->state);
-
-    remove(obj->idx_path);
-
-    if (rename(tmp_path, obj->dat_path) != 0)
-        exit_function(LDB_ERR_TMP_FILE);
-
-    free(tmp_path);
-    tmp_path = NULL;
-
-    if ((ret = ldb_open_dat(obj)) != LDB_OK)
-        exit_function(ret);
-
-    if ((ret = ldb_rebuild_idx(obj)) != LDB_OK)
-        exit_function(ret);
-
-    pthread_mutex_unlock(&obj->mutex_state);
-    pthread_mutex_unlock(&obj->mutex_files);
-
-    return removed_entries;
-
-END_FUNCTION:
-    free(tmp_path);
-    if (tmp_fp != NULL) fclose(tmp_fp);
-    ldb_close_files(obj);
-    ldb_reset_state(&obj->state);
-    pthread_mutex_unlock(&obj->mutex_state);
     pthread_mutex_unlock(&obj->mutex_files);
     return ret;
 }

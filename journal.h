@@ -46,7 +46,6 @@ SOFTWARE.
  *   - Records can be appended and read by seqnum
  *   - Records cannot be updated or deleted
  *   - Allows reverting the last entries (rollback)
- *   - Allows removing obsolete entries (purge)
  *   - Supports read-write concurrency (multi-thread)
  *   - Automatic data recovery in case of catastrophic events
  *   - Minimal memory footprint
@@ -108,7 +107,6 @@ SOFTWARE.
  *               ┌ open()         -       -     Initialize mutexes, create FILEs used to write and fds used to read
  *               ├ append()       -       W     dat and idx files flushed at the end. State updated after flush.
  * thread-write: ┼ rollback()     W       W     
- *               ├ purge()        W       W     
  *               └ close()        -       -     Destroy mutexes, close files
  *               ┌ range()        R       R     
  * thread-read:  ┼ read()         R       R     
@@ -142,9 +140,8 @@ SOFTWARE.
 #define LDB_ERR_ENTRY_SEQNUM     -21
 #define LDB_ERR_ENTRY_DATA       -22
 #define LDB_ERR_NOT_FOUND        -23
-#define LDB_ERR_TMP_FILE         -24
-#define LDB_ERR_CHECKSUM         -25
-#define LDB_ERR_LOCK             -26
+#define LDB_ERR_CHECKSUM         -24
+#define LDB_ERR_LOCK             -25
 
 #define LDB_OPEN_CREATE          (1 << 0)   // Create journal if it does not exist (default: false)
 #define LDB_OPEN_READONLY        (1 << 1)   // Open journal in read-only mode (default: false)
@@ -213,7 +210,7 @@ void ldb_free(ldb_journal_t *obj);
 /**
  * Opens a journal.
  * 
- * Creates the journal files (dat+idx) if they do not exist.
+ * Creates the journal files (dat+idx) if they do not exist (flag LDB_OPEN_CREATE).
  * Updates the index file if incomplete (not flushed + crash).
  * Rebuilds the index file when corrupted or not found.
  * 
@@ -353,27 +350,6 @@ int ldb_read(ldb_journal_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t l
 long ldb_rollback(ldb_journal_t *obj, uint64_t seqnum);
 
 /**
- * Remove all entries less than seqnum.
- * 
- * This function is expensive because it recreates the dat and idx files.
- * 
- * To prevent data loss in case of outage, we do:
- *   - A temporary data file is created.
- *   - Preserved records are copied from the dat file to the temporary file.
- *   - Temporary, dat and idx files are closed
- *   - The idx file is removed
- *   - The temporary file is renamed to dat
- *   - The dat file is opened
- *   - The idx file is rebuilt
- * 
- * @param[in] obj Journal to update.
- * @param[in] seqnum Sequence number up to which records are removed.
- * 
- * @return Number of removed entries, or error if negative.
- */
-long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
-
-/**
  * Checks (and optionally repairs) the integrity of a journal.
  *
  * If repair is false the journal is opened read-only (no lock is acquired). 
@@ -400,9 +376,9 @@ long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
  *   File not found or cannot be opened           No
  *   File locked by another process               Retry after closing external process
  *   Invalid header (magic number or format)      No
+ *   Index seqnum mismatch with dat               Yes (rebuilt)
  *   Sequence gap in index records                Yes (rebuilt)
  *   Index entry position out of bounds           Yes (rebuilt)
- *   Index seqnum mismatch with dat               Yes (rebuilt)
  *   Missing index records                        Yes (rebuilt)
  *   Trailing data after last valid record        Yes (zeroed)
  *
@@ -413,7 +389,7 @@ long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
  * @param[in] data   Opaque pointer forwarded to cb.
  *
  * @return LDB_OK if the journal is consistent (or was successfully repaired),
- *         LDB_ERR otherwise.
+ *         otherwise an error code.
  */
 int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, void *user_data);
 
@@ -535,10 +511,6 @@ class journal_t
 
     long rollback(uint64_t seqnum) {
         return ldb_rollback(m_journal, seqnum);
-    }
-
-    long purge(uint64_t seqnum) {
-        return ldb_purge(m_journal, seqnum);
     }
 
     static int check(const std::filesystem::path &path, const std::string &name, bool repair, std::function<void(const char*)> cb = nullptr)
