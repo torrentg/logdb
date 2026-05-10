@@ -417,6 +417,36 @@ long ldb_purge(ldb_journal_t *obj, uint64_t seqnum);
  */
 int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, void *user_data);
 
+/**
+ * Splits a journal into two journals at the given sequence number.
+ *
+ * The source journal is opened with an exclusive lock and must already exist.
+ * Journal A receives entries [seqnum1 .. seqnum-1] and journal B receives
+ * entries [seqnum .. seqnum2]. Both output journals inherit the header
+ * (including metadata) of the source journal. Index files are not generated;
+ * they will be rebuilt automatically on the first ldb_open().
+ *
+ * The caller is responsible for ensuring:
+ *   - seqnum is strictly inside the range (min_seqnum < seqnum <= max_seqnum)
+ *   - name_a and name_b are valid journal names and do not already exist
+ *   - name_a and name_b fit within the maximum name length
+ *
+ * If creation of journal B fails after journal A has been created,
+ * journal A is removed before returning the error.
+ *
+ * Side effect: if the source index file is missing, it is rebuilt in the
+ * source directory before the split is performed.
+ *
+ * @param[in] path    Directory where source and output journals are located.
+ * @param[in] name    Source journal name.
+ * @param[in] seqnum  First sequence number that goes into journal B.
+ * @param[in] name_a  Output journal name for the first half.
+ * @param[in] name_b  Output journal name for the second half.
+ *
+ * @return LDB_OK on success, or an error code on failure.
+ */
+int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *name_a, const char *name_b);
+
 #ifdef __cplusplus
 }
 
@@ -521,6 +551,12 @@ class journal_t
         };
 
         return ldb_check(path.c_str(), name.c_str(), repair, trampoline, &cb);
+    }
+
+    static int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum,
+                     const std::string &name_a, const std::string &name_b)
+    {
+        return ldb_split(path.c_str(), name.c_str(), seqnum, name_a.c_str(), name_b.c_str());
     }
 
   private:

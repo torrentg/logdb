@@ -616,6 +616,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    if (ldb_get_range(journal).min_seqnum == 0)
+        ldb_set_meta(journal, "performance", strlen("performance"));
+
     pthread_t thread_write;
     args_write_t args_write = { .journal = journal, .params = params_write };
     pthread_create(&thread_write, NULL, run_write, &args_write);

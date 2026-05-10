@@ -37,7 +37,8 @@ typedef enum mode_e {
     MODE_CHECK,
     MODE_REPAIR,
     MODE_ROLLBACK,
-    MODE_PURGE
+    MODE_PURGE,
+    MODE_SPLIT
 } mode_e;
 
 typedef struct params_t {
@@ -63,15 +64,17 @@ static void print_help(FILE *out)
         "  " APP_NAME " --repair   FILE\n"
         "  " APP_NAME " --rollback (-n NUM | -s SEQ) FILE\n"
         "  " APP_NAME " --purge    (-n NUM | -s SEQ) FILE\n"
+        "  " APP_NAME " --split    (-n NUM | -s SEQ) FILE\n"
         "\n"
         "Options:\n"
         "  -h, --help              Show this help and exit\n"
-        "      --check             Validate journal consistency\n"
-        "      --repair            Check and repair journal consistency\n"
-        "      --rollback          Remove newest entries (from end)\n"
-        "      --purge             Remove oldest entries (from start)\n"
-        "  -n, --num=NUM           Number of entries to remove\n"
-        "  -s, --seq=SEQ           New boundary (purge keeps from SEQ; rollback keeps up to SEQ)\n"
+        "      --check             Check journal consistency\n"
+        "      --repair            Repair journal inconsistencies\n"
+        "      --rollback          Remove newest entries (from the end)\n"
+        "      --purge             Remove oldest entries (from the start)\n"
+        "      --split             Split journal into two\n"
+        "  -n, --num=NUM           Number of entries to remove/keep\n"
+        "  -s, --seq=SEQ           Boundary sequence number\n"
         "\n"
         "Exit codes:\n"
         "  0  Success\n"
@@ -178,7 +181,7 @@ static int cmd_summary(const params_t *params)
 
     ldb_get_meta(journal, meta, sizeof(meta));
 
-    printf("Metadata: \n");
+    printf("Metadata:\n");
     print_hexdump(stdout, (const unsigned char *)meta, sizeof(meta));
 
     range = ldb_get_range(journal);
@@ -282,6 +285,58 @@ static int cmd_check(const params_t *params, bool repair)
     return (rc == LDB_OK ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 
+static int cmd_split(const params_t *params)
+{
+    int rc = 0;
+    int ret = EXIT_FAILURE;
+    uint64_t seq = 0;
+    ldb_journal_t *journal = NULL;
+    ldb_range_t range = {0};
+    char name_a[68] = {0};
+    char name_b[68] = {0};
+
+    assert(params->have_num != params->have_seq);
+
+    snprintf(name_a, sizeof(name_a), "%s-a", params->name);
+    snprintf(name_b, sizeof(name_b), "%s-b", params->name);
+
+    if ((journal = ldb_alloc()) == NULL)
+        exit_function(EXIT_FAILURE, "%s", "out of memory");
+
+    if ((rc = ldb_open(journal, params->path, params->name, LDB_OPEN_READONLY)) != LDB_OK)
+        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+
+    range = ldb_get_range(journal);
+
+    ldb_close(journal);
+    ldb_free(journal);
+    journal = NULL;
+
+    if (params->have_num)
+        seq = range.min_seqnum + params->num;
+    else
+        seq = params->seq;
+
+    if (range.min_seqnum == 0)
+        exit_function(EXIT_FAILURE, "%s", "journal is empty");
+
+    if (seq <= range.min_seqnum || seq > range.max_seqnum)
+        exit_function(EXIT_FAILURE, "%s", "invalid split point");
+
+    if ((rc = ldb_split(params->path, params->name, seq, name_a, name_b)) != LDB_OK)
+        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+
+    printf("Journal '%s' split at seqnum %" PRIu64 " into '%s' and '%s'.\n",
+           params->name, seq, name_a, name_b);
+
+    ret = EXIT_SUCCESS;
+
+END_FUNCTION:
+    ldb_close(journal);
+    ldb_free(journal);
+    return ret;
+}
+
 static void parse_args(int argc, char **argv, params_t *params)
 {
     int opt = 0;
@@ -292,6 +347,7 @@ static void parse_args(int argc, char **argv, params_t *params)
         {"repair",   no_argument,       0, 1002},
         {"purge",    no_argument,       0, 1003},
         {"rollback", no_argument,       0, 1004},
+        {"split",    no_argument,       0, 1005},
         {"num",      required_argument, 0, 'n'},
         {"seq",      required_argument, 0, 's'},
         {0, 0, 0, 0}
@@ -333,6 +389,9 @@ static void parse_args(int argc, char **argv, params_t *params)
             case 1004:
                 params->mode = MODE_ROLLBACK;
                 break;
+            case 1005:
+                params->mode = MODE_SPLIT;
+                break;
             default:
                 exit(EXIT_FAILURE);
         }
@@ -348,6 +407,7 @@ static void parse_args(int argc, char **argv, params_t *params)
             break;
         case MODE_PURGE:
         case MODE_ROLLBACK:
+        case MODE_SPLIT:
             if (params->have_num == params->have_seq) {
                 fprintf(stderr, "%s: specify exactly one of -n/--num or -s/--seq\n", APP_NAME);
                 exit(EXIT_FAILURE);
@@ -407,6 +467,8 @@ int main(int argc, char **argv)
             return cmd_rollback(&params);
         case MODE_PURGE:
             return cmd_purge(&params);
+        case MODE_SPLIT:
+            return cmd_split(&params);
         default:
             break;
     }

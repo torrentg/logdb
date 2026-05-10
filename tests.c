@@ -150,15 +150,19 @@ void test_is_valid_name(void)
     TEST_CHECK(ldb_is_valid_name("_"));
     TEST_CHECK(ldb_is_valid_name("a"));
     TEST_CHECK(ldb_is_valid_name("abc"));
+    TEST_CHECK(ldb_is_valid_name("test-a"));
+    TEST_CHECK(ldb_is_valid_name("test-b"));
+    TEST_CHECK(ldb_is_valid_name("my-journal-1"));
+    TEST_CHECK(ldb_is_valid_name("-leading-hyphen"));
 
     TEST_CHECK(!ldb_is_valid_name(NULL));
     TEST_CHECK(!ldb_is_valid_name(""));
     TEST_CHECK(!ldb_is_valid_name("too_long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
 
     char name[] = "x";
-    for (int i = 0; i < 256; i++) {
+    for (int i = 1; i < 256; i++) {
         name[0] = (char) i;
-        TEST_CHECK(ldb_is_valid_name(name) == (isalnum(i) || name[0] == '_'));
+        TEST_CHECK(ldb_is_valid_name(name) == (isalnum(name[0]) || strchr("_-", name[0]) != NULL));
     }
 }
 
@@ -223,7 +227,6 @@ void test_open_invalid_name(void) {
     TEST_CHECK(ldb_open(&journal, "/tmp/",  NULL , 0) == LDB_ERR_NAME);
     TEST_CHECK(ldb_open(&journal, "/tmp/", "", 0) == LDB_ERR_NAME);
     TEST_CHECK(ldb_open(&journal, "/tmp/", ".", 0) == LDB_ERR_NAME);
-    TEST_CHECK(ldb_open(&journal, "/tmp/", "xxx-3", 0) == LDB_ERR_NAME);
     TEST_CHECK(ldb_open(&journal, "/tmp/", "xxx?", 0) == LDB_ERR_NAME);
     TEST_CHECK(ldb_open(&journal, "/tmp/", "too_long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 0) == LDB_ERR_NAME);
 }
@@ -1466,7 +1469,7 @@ void test_check_missing_files(void)
     // dat exists but idx missing (empty journal dat, no data)
     ldb_create_dat("test.dat");
     TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_NOFILE_IDX);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR_NOFILE_IDX);
+    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
 
     remove("test.dat");
 }
@@ -1798,6 +1801,185 @@ void test_check_idx_missing_records(void)
     remove("test.idx");
 }
 
+void test_split_nominal_case(void)
+{
+    char buf[2048] = {0};
+    ldb_impl_t src = {0};
+    ldb_impl_t a = {0};
+    ldb_impl_t b = {0};
+    ldb_entry_t entry = {0};
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+
+    TEST_ASSERT(ldb_open(&src, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&src, 10, 19);
+    TEST_CHECK(src.state.min_seqnum == 10);
+    TEST_CHECK(src.state.max_seqnum == 19);
+    ldb_close(&src);
+
+    // split at seqnum 15: A=[10..14], B=[15..19]
+    TEST_CHECK(ldb_split("", "test", 15, "test-a", "test-b") == LDB_OK);
+
+    TEST_ASSERT(ldb_open(&a, "", "test-a", 0) == LDB_OK);
+    TEST_CHECK(a.state.min_seqnum == 10);
+    TEST_CHECK(a.state.max_seqnum == 14);
+    TEST_CHECK(ldb_read(&a, 10, &entry, 1, buf, sizeof(buf), NULL) == LDB_OK);
+    TEST_CHECK(check_entry(&entry, 10, "data-10"));
+    ldb_close(&a);
+
+    TEST_ASSERT(ldb_open(&b, "", "test-b", 0) == LDB_OK);
+    TEST_CHECK(b.state.min_seqnum == 15);
+    TEST_CHECK(b.state.max_seqnum == 19);
+    TEST_CHECK(ldb_read(&b, 15, &entry, 1, buf, sizeof(buf), NULL) == LDB_OK);
+    TEST_CHECK(check_entry(&entry, 15, "data-15"));
+    ldb_close(&b);
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+}
+
+void test_split_at_min_seqnum(void)
+{
+    ldb_impl_t src = {0};
+    ldb_impl_t a = {0};
+    ldb_impl_t b = {0};
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+
+    TEST_ASSERT(ldb_open(&src, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&src, 10, 19);
+    ldb_close(&src);
+
+    // split at min_seqnum=10: A gets empty (header only), B gets all
+    TEST_CHECK(ldb_split("", "test", 10, "test-a", "test-b") == LDB_OK);
+
+    TEST_ASSERT(ldb_open(&a, "", "test-a", 0) == LDB_OK);
+    TEST_CHECK(a.state.min_seqnum == 0);  // empty
+    TEST_CHECK(a.state.max_seqnum == 0);
+    ldb_close(&a);
+
+    TEST_ASSERT(ldb_open(&b, "", "test-b", 0) == LDB_OK);
+    TEST_CHECK(b.state.min_seqnum == 10);
+    TEST_CHECK(b.state.max_seqnum == 19);
+    ldb_close(&b);
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+}
+
+void test_split_at_max_seqnum(void)
+{
+    ldb_impl_t src = {0};
+    ldb_impl_t a = {0};
+    ldb_impl_t b = {0};
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+
+    TEST_ASSERT(ldb_open(&src, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&src, 10, 19);
+    ldb_close(&src);
+
+    // split at max_seqnum=19: A=[10..18], B=[19..19]
+    TEST_CHECK(ldb_split("", "test", 19, "test-a", "test-b") == LDB_OK);
+
+    TEST_ASSERT(ldb_open(&a, "", "test-a", 0) == LDB_OK);
+    TEST_CHECK(a.state.min_seqnum == 10);
+    TEST_CHECK(a.state.max_seqnum == 18);
+    ldb_close(&a);
+
+    TEST_ASSERT(ldb_open(&b, "", "test-b", 0) == LDB_OK);
+    TEST_CHECK(b.state.min_seqnum == 19);
+    TEST_CHECK(b.state.max_seqnum == 19);
+    ldb_close(&b);
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+}
+
+void test_split_out_of_range(void)
+{
+    ldb_impl_t src = {0};
+
+    remove("test.dat"); remove("test.idx");
+
+    TEST_ASSERT(ldb_open(&src, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&src, 10, 19);
+    ldb_close(&src);
+
+    // seqnum beyond max: ldb_read_record_idx returns LDB_ERR
+    TEST_CHECK(ldb_split("", "test", 20, "test-a", "test-b") != LDB_OK);
+    TEST_CHECK(access("test-a.dat", F_OK) != 0);  // not created
+    TEST_CHECK(access("test-b.dat", F_OK) != 0);
+
+    remove("test.dat"); remove("test.idx");
+}
+
+void test_split_output_exists(void)
+{
+    ldb_impl_t src = {0};
+    ldb_impl_t pre = {0};
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+
+    TEST_ASSERT(ldb_open(&src, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&src, 10, 19);
+    ldb_close(&src);
+
+    // pre-create test-a.dat
+    TEST_ASSERT(ldb_open(&pre, "", "test-a", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_close(&pre);
+
+    TEST_CHECK(ldb_split("", "test", 15, "test-a", "test-b") == LDB_ERR_CREATE_DAT);
+    TEST_CHECK(access("test-b.dat", F_OK) != 0);  // B not created (A failed first)
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+}
+
+void test_split_metadata_inherited(void)
+{
+    char buf[LDB_METADATA_LEN] = {0};
+    ldb_impl_t src = {0};
+    ldb_impl_t a = {0};
+    ldb_impl_t b = {0};
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+
+    TEST_ASSERT(ldb_open(&src, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    TEST_CHECK(ldb_set_meta(&src, "hello", 5) == LDB_OK);
+    append_entries(&src, 1, 10);
+    ldb_close(&src);
+
+    TEST_ASSERT(ldb_split("", "test", 6, "test-a", "test-b") == LDB_OK);
+
+    TEST_ASSERT(ldb_open(&a, "", "test-a", 0) == LDB_OK);
+    TEST_CHECK(ldb_get_meta(&a, buf, sizeof(buf)) == LDB_OK);
+    TEST_CHECK(memcmp(buf, "hello", 5) == 0);
+    ldb_close(&a);
+
+    memset(buf, 0, sizeof(buf));
+    TEST_ASSERT(ldb_open(&b, "", "test-b", 0) == LDB_OK);
+    TEST_CHECK(ldb_get_meta(&b, buf, sizeof(buf)) == LDB_OK);
+    TEST_CHECK(memcmp(buf, "hello", 5) == 0);
+    ldb_close(&b);
+
+    remove("test.dat");  remove("test.idx");
+    remove("test-a.dat"); remove("test-a.idx");
+    remove("test-b.dat"); remove("test-b.idx");
+}
+
 TEST_LIST = {
     { "sizeof()",                     test_sizeof },
     { "crc32()",                      test_crc32 },
@@ -1861,5 +2043,11 @@ TEST_LIST = {
     { "check() idx trailing data",    test_check_idx_trailing_data },
     { "check() idx rebuilt",          test_check_idx_rebuilt },
     { "check() idx missing records",  test_check_idx_missing_records },
+    { "split() nominal case",          test_split_nominal_case },
+    { "split() at min seqnum",         test_split_at_min_seqnum },
+    { "split() at max seqnum",         test_split_at_max_seqnum },
+    { "split() out of range",          test_split_out_of_range },
+    { "split() output exists",         test_split_output_exists },
+    { "split() metadata inherited",    test_split_metadata_inherited },
     { NULL, NULL }
 };

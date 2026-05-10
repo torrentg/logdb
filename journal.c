@@ -316,7 +316,12 @@ static bool ldb_is_valid_name(const char *name)
 
     const char *ptr = name;
 
-    while (*ptr != 0 && (isalnum(*ptr) || *ptr == '_'))
+    if (!isalnum((unsigned char)*ptr) && strchr("_-", *ptr) == NULL)
+        return false;
+
+    ptr++;
+
+    while (*ptr != 0 && (isalnum((unsigned char)*ptr) || strchr("_-", *ptr) != NULL))
         ptr++;
 
     return (*ptr == 0 && ptr - name <= LDB_NAME_MAX_LENGTH);
@@ -794,7 +799,7 @@ static int ldb_read_record_idx(int fd, ldb_range_t *state, uint64_t seqnum, ldb_
     assert(fd > STDERR_FILENO);
 
     if (state->min_seqnum == 0 || seqnum < state->min_seqnum || state->max_seqnum < seqnum)
-        return LDB_ERR;
+        return LDB_ERR_NOT_FOUND;
 
     ssize_t rc = 0;
     size_t pos = ldb_get_pos_idx(state, seqnum);
@@ -1349,8 +1354,9 @@ static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
     bool is_repaired = false;
 
     if (access(obj->idx_path, F_OK) != 0) {
+        has_issues = true;
         notify(cb, user_data, "%s", "index file not found");
-        return LDB_ERR_NOFILE_IDX;
+        exit_function(LDB_ERR_NOFILE_IDX);
     }
 
     obj->idx_fp = fopen(obj->idx_path, obj->read_only ? "r" : "r+");
@@ -1509,6 +1515,123 @@ END_FUNCTION:
 
 #undef goto_zeroize
 #undef notify
+
+int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *name_a, const char *name_b)
+{
+    int ret = LDB_OK;
+    ldb_impl_t obj = {0};
+    ldb_impl_t obj_a = {0};
+    ldb_impl_t obj_b = {0};
+    ldb_header_dat_t header_dat = {0};
+    ldb_record_idx_t record_idx = {0};
+    char *filename_a = NULL;
+    char *filename_b = NULL;
+    char *idx_filename_a = NULL;
+    char *idx_filename_b = NULL;
+    FILE *fp_a = NULL;
+    FILE *fp_b = NULL;
+    int dat_fd = -1;
+    int idx_fd = -1;
+    ssize_t rc = 0;
+
+    if (!ldb_is_valid_name(name) || !ldb_is_valid_name(name_a) || !ldb_is_valid_name(name_b))
+        exit_function(LDB_ERR_ARG);
+
+    if (strcmp(name, name_a) == 0 || strcmp(name, name_b) == 0 || strcmp(name_a, name_b) == 0)
+        exit_function(LDB_ERR_ARG); 
+
+    if ((filename_a = ldb_create_filename(path, name_a, LDB_EXT_DAT)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((filename_b = ldb_create_filename(path, name_b, LDB_EXT_DAT)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((idx_filename_a = ldb_create_filename(path, name_a, LDB_EXT_IDX)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((idx_filename_b = ldb_create_filename(path, name_b, LDB_EXT_IDX)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((ret = ldb_open(&obj, path, name, 0)) != LDB_OK)
+        exit_function(ret);
+
+    dat_fd = fileno(obj.dat_fp);
+    idx_fd = fileno(obj.idx_fp);
+
+    if ((ret = ldb_read_record_idx(idx_fd, &obj.state, seqnum, &record_idx)) != LDB_OK)
+        exit_function(ret);
+
+    rc = pread(dat_fd, &header_dat, sizeof(ldb_header_dat_t), 0);
+
+    if (rc != (ssize_t) sizeof(ldb_header_dat_t))
+        exit_function(LDB_ERR_READ_DAT);
+
+    // Create journal A (seqnum1 .. seqnum-1)
+    if ((fp_a = fopen(filename_a, "wx")) == NULL)
+        exit_function(LDB_ERR_CREATE_DAT);
+
+    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_a) != 1)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (!ldb_copy_file(obj.dat_fp, sizeof(ldb_header_dat_t), record_idx.pos, fp_a, sizeof(ldb_header_dat_t)))
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (fclose(fp_a) != 0)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    fp_a = NULL;
+
+    // Create journal B (seqnum .. seqnum2)
+    if ((fp_b = fopen(filename_b, "wx")) == NULL)
+        exit_function(LDB_ERR_CREATE_DAT);
+
+    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_b) != 1)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (!ldb_copy_file(obj.dat_fp, record_idx.pos, obj.dat_end, fp_b, sizeof(ldb_header_dat_t)))
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (fclose(fp_b) != 0)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    fp_b = NULL;
+
+    // Generate index for journal A
+    if ((ret = ldb_open(&obj_a, path, name_a, 0)) != LDB_OK)
+        exit_function(ret);
+
+    ldb_close(&obj_a);
+
+    // Generate index for journal B
+    if ((ret = ldb_open(&obj_b, path, name_b, 0)) != LDB_OK)
+        exit_function(ret);
+
+    ldb_close(&obj_b);
+
+    // Remove original journal (dat and idx)
+    remove(obj.dat_path);
+    remove(obj.idx_path);
+
+    ret = LDB_OK;
+
+END_FUNCTION:
+    ldb_close(&obj);
+    ldb_close(&obj_a);
+    ldb_close(&obj_b);
+    if (fp_a != NULL) fclose(fp_a);
+    if (fp_b != NULL) fclose(fp_b);
+    if (ret != LDB_OK) {
+        if (filename_a) remove(filename_a);
+        if (filename_b) remove(filename_b);
+        if (idx_filename_a) remove(idx_filename_a);
+        if (idx_filename_b) remove(idx_filename_b);
+    }
+    free(filename_a);
+    free(filename_b);
+    free(idx_filename_a);
+    free(idx_filename_b);
+    return ret;
+}
 
 const char * ldb_version(void)
 {
