@@ -1887,6 +1887,222 @@ void test_split_metadata_inherited(void)
     remove("test-b.dat"); remove("test-b.idx");
 }
 
+void test_join_invalid_args(void)
+{
+    // NULL arguments
+    TEST_CHECK(ldb_join(NULL,  "j1", "j2", "out") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("",   NULL,  "j2", "out") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("",   "j1", NULL,  "out") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("",   "j1", "j2",  NULL)  == LDB_ERR_ARG);
+
+    // invalid names
+    TEST_CHECK(ldb_join("", "bad name", "j2", "out") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("", "j1", "bad name", "out") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("", "j1", "j2", "bad name") == LDB_ERR_ARG);
+
+    // duplicate names
+    TEST_CHECK(ldb_join("", "j1", "j1", "out") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("", "j1", "j2", "j1") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("", "j1", "j2", "j2") == LDB_ERR_ARG);
+}
+
+void test_join_nominal(void)
+{
+    char buf[2048] = {0};
+    ldb_impl_t j1 = {0};
+    ldb_impl_t j2 = {0};
+    ldb_impl_t out = {0};
+    ldb_entry_t entry = {0};
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+    remove("test-out.dat"); remove("test-out.idx");
+
+    TEST_ASSERT(ldb_open(&j1, "", "test1", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j1, 10, 19);
+    TEST_CHECK(j1.state.min_seqnum == 10);
+    TEST_CHECK(j1.state.max_seqnum == 19);
+    ldb_close(&j1);
+
+    TEST_ASSERT(ldb_open(&j2, "", "test2", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j2, 20, 29);
+    TEST_CHECK(j2.state.min_seqnum == 20);
+    TEST_CHECK(j2.state.max_seqnum == 29);
+    ldb_close(&j2);
+
+    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_OK);
+
+    // source journals removed
+    TEST_CHECK(access("test1.dat", F_OK) != 0);
+    TEST_CHECK(access("test2.dat", F_OK) != 0);
+
+    TEST_ASSERT(ldb_open(&out, "", "test-out", 0) == LDB_OK);
+    TEST_CHECK(out.state.min_seqnum == 10);
+    TEST_CHECK(out.state.max_seqnum == 29);
+    TEST_CHECK(ldb_read(&out, 10, &entry, 1, buf, sizeof(buf), NULL) == LDB_OK);
+    TEST_CHECK(check_entry(&entry, 10, "data-10"));
+    TEST_CHECK(ldb_read(&out, 25, &entry, 1, buf, sizeof(buf), NULL) == LDB_OK);
+    TEST_CHECK(check_entry(&entry, 25, "data-25"));
+    ldb_close(&out);
+
+    // reopen to verify persistence
+    TEST_ASSERT(ldb_open(&out, "", "test-out", 0) == LDB_OK);
+    TEST_CHECK(out.state.min_seqnum == 10);
+    TEST_CHECK(out.state.max_seqnum == 29);
+    ldb_close(&out);
+
+    remove("test-out.dat"); remove("test-out.idx");
+}
+
+void test_join_metadata(void)
+{
+    char buf[LDB_METADATA_LEN] = {0};
+    ldb_impl_t j1 = {0};
+    ldb_impl_t j2 = {0};
+    ldb_impl_t out = {0};
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+    remove("test-out.dat"); remove("test-out.idx");
+
+    TEST_ASSERT(ldb_open(&j1, "", "test1", LDB_OPEN_CREATE) == LDB_OK);
+    TEST_CHECK(ldb_set_meta(&j1, "meta1", 5) == LDB_OK);
+    append_entries(&j1, 1, 5);
+    ldb_close(&j1);
+
+    TEST_ASSERT(ldb_open(&j2, "", "test2", LDB_OPEN_CREATE) == LDB_OK);
+    TEST_CHECK(ldb_set_meta(&j2, "meta2", 5) == LDB_OK);
+    append_entries(&j2, 6, 10);
+    ldb_close(&j2);
+
+    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_OK);
+
+    TEST_ASSERT(ldb_open(&out, "", "test-out", 0) == LDB_OK);
+    TEST_CHECK(ldb_get_meta(&out, buf, sizeof(buf)) == LDB_OK);
+    TEST_CHECK(memcmp(buf, "meta1", 5) == 0);  // inherits name1 metadata
+    ldb_close(&out);
+
+    remove("test-out.dat"); remove("test-out.idx");
+}
+
+void test_join_non_consecutive(void)
+{
+    ldb_impl_t j1 = {0};
+    ldb_impl_t j2 = {0};
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+    remove("test-out.dat"); remove("test-out.idx");
+
+    TEST_ASSERT(ldb_open(&j1, "", "test1", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j1, 10, 19);
+    ldb_close(&j1);
+
+    TEST_ASSERT(ldb_open(&j2, "", "test2", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j2, 21, 29);  // gap: 20 is missing
+    ldb_close(&j2);
+
+    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_ERR_ENTRY_SEQNUM);
+
+    // source journals left intact
+    TEST_CHECK(access("test1.dat", F_OK) == 0);
+    TEST_CHECK(access("test2.dat", F_OK) == 0);
+    // output not created
+    TEST_CHECK(access("test-out.dat", F_OK) != 0);
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+}
+
+void test_join_output_exists(void)
+{
+    ldb_impl_t j1 = {0};
+    ldb_impl_t j2 = {0};
+    ldb_impl_t pre = {0};
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+    remove("test-out.dat"); remove("test-out.idx");
+
+    TEST_ASSERT(ldb_open(&j1, "", "test1", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j1, 10, 19);
+    ldb_close(&j1);
+
+    TEST_ASSERT(ldb_open(&j2, "", "test2", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j2, 20, 29);
+    ldb_close(&j2);
+
+    // pre-create output
+    TEST_ASSERT(ldb_open(&pre, "", "test-out", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_close(&pre);
+
+    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_ERR_CREATE_DAT);
+
+    // source journals left intact
+    TEST_CHECK(access("test1.dat", F_OK) == 0);
+    TEST_CHECK(access("test2.dat", F_OK) == 0);
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+    remove("test-out.dat"); remove("test-out.idx");
+}
+
+void test_join_first_empty(void)
+{
+    ldb_impl_t j1 = {0};
+    ldb_impl_t j2 = {0};
+    ldb_impl_t out = {0};
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+    remove("test-out.dat"); remove("test-out.idx");
+
+    // test1 is empty
+    TEST_ASSERT(ldb_open(&j1, "", "test1", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_close(&j1);
+
+    TEST_ASSERT(ldb_open(&j2, "", "test2", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j2, 20, 29);
+    ldb_close(&j2);
+
+    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_OK);
+
+    TEST_ASSERT(ldb_open(&out, "", "test-out", 0) == LDB_OK);
+    TEST_CHECK(out.state.min_seqnum == 20);
+    TEST_CHECK(out.state.max_seqnum == 29);
+    ldb_close(&out);
+
+    remove("test-out.dat"); remove("test-out.idx");
+}
+
+void test_join_second_empty(void)
+{
+    ldb_impl_t j1 = {0};
+    ldb_impl_t j2 = {0};
+    ldb_impl_t out = {0};
+
+    remove("test1.dat"); remove("test1.idx");
+    remove("test2.dat"); remove("test2.idx");
+    remove("test-out.dat"); remove("test-out.idx");
+
+    TEST_ASSERT(ldb_open(&j1, "", "test1", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&j1, 10, 19);
+    ldb_close(&j1);
+
+    // test2 is empty
+    TEST_ASSERT(ldb_open(&j2, "", "test2", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_close(&j2);
+
+    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_OK);
+
+    TEST_ASSERT(ldb_open(&out, "", "test-out", 0) == LDB_OK);
+    TEST_CHECK(out.state.min_seqnum == 10);
+    TEST_CHECK(out.state.max_seqnum == 19);
+    ldb_close(&out);
+
+    remove("test-out.dat"); remove("test-out.idx");
+}
+
 TEST_LIST = {
     { "sizeof()",                     test_sizeof },
     { "crc32()",                      test_crc32 },
@@ -1951,5 +2167,12 @@ TEST_LIST = {
     { "split() out of range",          test_split_out_of_range },
     { "split() output exists",         test_split_output_exists },
     { "split() metadata inherited",    test_split_metadata_inherited },
+    { "join() invalid args",           test_join_invalid_args },
+    { "join() nominal case",           test_join_nominal },
+    { "join() metadata inherited",     test_join_metadata },
+    { "join() non consecutive",        test_join_non_consecutive },
+    { "join() output exists",          test_join_output_exists },
+    { "join() first empty",            test_join_first_empty },
+    { "join() second empty",           test_join_second_empty },
     { NULL, NULL }
 };

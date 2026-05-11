@@ -230,7 +230,7 @@ int ldb_open(ldb_journal_t *obj, const char *path, const char *name, int flags);
  * 
  * Closes open files and releases allocated memory.
  * 
- * @param[in,out] obj Journal to close.
+ * @param[in,out] obj Journal to close (can be NULL).
  * 
  * @return Return code (0 = OK).
  */
@@ -423,6 +423,39 @@ int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, 
  */
 int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *name_a, const char *name_b);
 
+/**
+ * Joins two consecutive journals into a new journal.
+ *
+ * Both source journals are opened with an exclusive lock and must already exist.
+ * The output journal receives entries [name1.min_seqnum .. name2.max_seqnum] and
+ * inherits the header (including metadata) of the first source journal (name1).
+ * The index file of the output journal is generated during the operation.
+ *
+ * If one of the source journals is empty, the result is a copy of the other.
+ * If both are empty, the result is an empty journal inheriting name1's header.
+ *
+ * The caller is responsible for ensuring:
+ *   - name1, name2 and name are valid journal names, all distinct from each other
+ *   - name does not already exist
+ *   - name1 and name2 are in the same directory (path)
+ *   - name2.min_seqnum == name1.max_seqnum + 1 (consecutiveness)
+ *
+ * On success, the source journals (name1 and name2) are removed.
+ * On error, any partially created output files are removed and
+ * the source journals are left intact.
+ *
+ * Side effect: if a source index file is missing, it is rebuilt before
+ * the join is performed.
+ *
+ * @param[in] path   Directory where source and output journals are located.
+ * @param[in] name1  First source journal name.
+ * @param[in] name2  Second source journal name.
+ * @param[in] name   Output journal name.
+ *
+ * @return LDB_OK on success, or an error code on failure.
+ */
+int ldb_join(const char *path, const char *name1, const char *name2, const char *name);
+
 #ifdef __cplusplus
 }
 
@@ -529,6 +562,12 @@ class journal_t
                      const std::string &name_a, const std::string &name_b)
     {
         return ldb_split(path.c_str(), name.c_str(), seqnum, name_a.c_str(), name_b.c_str());
+    }
+
+    static int join(const std::filesystem::path &path, const std::string &name1,
+                    const std::string &name2, const std::string &name)
+    {
+        return ldb_join(path.c_str(), name1.c_str(), name2.c_str(), name.c_str());
     }
 
   private:

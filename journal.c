@@ -1631,6 +1631,103 @@ END_FUNCTION:
     return ret;
 }
 
+int ldb_join(const char *path, const char *name1, const char *name2, const char *name)
+{
+    int ret = LDB_OK;
+    ldb_impl_t obj1 = {0};
+    ldb_impl_t obj2 = {0};
+    ldb_impl_t obj_out = {0};
+    ldb_header_dat_t header_dat = {0};
+    char *filename_out = NULL;
+    char *idx_filename_out = NULL;
+    FILE *fp_out = NULL;
+    int dat_fd1 = -1;
+    ssize_t rc = 0;
+
+    if (!path)
+        exit_function(LDB_ERR_ARG);
+
+    if (!ldb_is_valid_name(name1) || !ldb_is_valid_name(name2) || !ldb_is_valid_name(name))
+        exit_function(LDB_ERR_ARG);
+
+    if (strcmp(name1, name2) == 0 || strcmp(name1, name) == 0 || strcmp(name2, name) == 0)
+        exit_function(LDB_ERR_ARG);
+
+    if ((filename_out = ldb_create_filename(path, name, LDB_EXT_DAT)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((idx_filename_out = ldb_create_filename(path, name, LDB_EXT_IDX)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((ret = ldb_open(&obj1, path, name1, 0)) != LDB_OK)
+        exit_function(ret);
+
+    if ((ret = ldb_open(&obj2, path, name2, 0)) != LDB_OK)
+        exit_function(ret);
+
+    dat_fd1 = fileno(obj1.dat_fp);
+
+    rc = pread(dat_fd1, &header_dat, sizeof(ldb_header_dat_t), 0);
+
+    if (rc != (ssize_t) sizeof(ldb_header_dat_t))
+        exit_function(LDB_ERR_READ_DAT);
+
+    // check consecutiveness only when both journals have entries
+    if (obj1.state.min_seqnum != 0 && obj2.state.min_seqnum != 0) {
+        if (obj1.state.max_seqnum + 1 != obj2.state.min_seqnum)
+            exit_function(LDB_ERR_ENTRY_SEQNUM);
+    }
+
+    if ((fp_out = fopen(filename_out, "wx")) == NULL)
+        exit_function(LDB_ERR_CREATE_DAT);
+
+    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_out) != 1)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (obj1.state.min_seqnum != 0) {
+        if (!ldb_copy_file(obj1.dat_fp, sizeof(ldb_header_dat_t), obj1.dat_end, fp_out, sizeof(ldb_header_dat_t)))
+            exit_function(LDB_ERR_WRITE_DAT);
+    }
+
+    if (obj2.state.min_seqnum != 0) {
+        size_t pos_out = (obj1.state.min_seqnum != 0) ? obj1.dat_end : sizeof(ldb_header_dat_t);
+        if (!ldb_copy_file(obj2.dat_fp, sizeof(ldb_header_dat_t), obj2.dat_end, fp_out, pos_out))
+            exit_function(LDB_ERR_WRITE_DAT);
+    }
+
+    if (fclose(fp_out) != 0)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    fp_out = NULL;
+
+    // Generate index for output journal
+    if ((ret = ldb_open(&obj_out, path, name, 0)) != LDB_OK)
+        exit_function(ret);
+
+    ldb_close(&obj_out);
+
+    // Remove source journals
+    remove(obj1.dat_path);
+    remove(obj1.idx_path);
+    remove(obj2.dat_path);
+    remove(obj2.idx_path);
+
+    ret = LDB_OK;
+
+END_FUNCTION:
+    ldb_close(&obj1);
+    ldb_close(&obj2);
+    ldb_close(&obj_out);
+    if (fp_out != NULL) fclose(fp_out);
+    if (ret != LDB_OK) {
+        if (filename_out) remove(filename_out);
+        if (idx_filename_out) remove(idx_filename_out);
+    }
+    free(filename_out);
+    free(idx_filename_out);
+    return ret;
+}
+
 const char * ldb_version(void)
 {
     return LDB_STR(LDB_VERSION_MAJOR) "." LDB_STR(LDB_VERSION_MINOR) "." LDB_STR(LDB_VERSION_PATCH);
