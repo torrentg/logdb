@@ -65,7 +65,7 @@ static void print_help(FILE *out)
         "  " APP_NAME " --repair FILE\n"
         "  " APP_NAME " --rollback (-n NUM | -s SEQ) FILE\n"
         "  " APP_NAME " --split (-n NUM | -s SEQ) FILE\n"
-        "  " APP_NAME " --join -o NAME FILE1 FILE2\n"
+        "  " APP_NAME " --join -o FILE FILE1 FILE2\n"
         "\n"
         "Options:\n"
         "  -h, --help              Show this help and exit\n"
@@ -76,11 +76,11 @@ static void print_help(FILE *out)
         "      --join              Join two consecutive journals (replaces originals)\n"
         "  -n, --num=NUM           Number of entries to remove/keep\n"
         "  -s, --seq=SEQ           Boundary sequence number\n"
-        "  -o, --output=NAME       Output journal name (for --join)\n"
+        "  -o, --output=FILE       Output journal file (for --join)\n"
         "\n"
         "Exit codes:\n"
         "  0  Success\n"
-        "  1  Failure (invalid args, missing files, locked files, I/O errors, etc.)\n"
+        "  1  Failure\n"
     );
 }
 
@@ -167,12 +167,6 @@ static bool parse_fileinfo(const char *filepath, fileinfo_t *fi)
     fi->exists = (access(filepath, F_OK) == 0);
 
     return true;
-}
-
-static void check_report_cb(const char *msg, void *user_data)
-{
-    (void) user_data;
-    printf("%s\n", msg);
 }
 
 #define exit_function(retval, msg, ...) \
@@ -268,11 +262,26 @@ END_FUNCTION:
 
 static int cmd_check(const params_t *params, bool repair)
 {
-    int rc = ldb_check(params->file1.path, params->file1.name, repair, check_report_cb, NULL);
+    int rc = 0;
+    int ret = EXIT_SUCCESS;
+    ldb_journal_t *journal = NULL;
+    int flags = (repair ? 0 : LDB_OPEN_READONLY);
 
-    printf("%s\n", (rc == LDB_OK ? "Journal OK" : "Journal has issues"));
+    if ((journal = ldb_alloc()) == NULL)
+        exit_function(EXIT_FAILURE, "%s", "out of memory");
 
-    return (rc == LDB_OK ? EXIT_SUCCESS : EXIT_FAILURE);
+    if ((rc = ldb_open(journal, params->file1.path, params->file1.name, flags)) != LDB_OK)
+        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+
+    if ((rc = ldb_check(journal, repair)) != LDB_OK)
+        exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
+
+    printf(APP_NAME ": Journal is OK.\n");
+
+END_FUNCTION:
+    ldb_close(journal);
+    ldb_free(journal);
+    return ret;
 }
 
 static int cmd_split(const params_t *params)
@@ -338,6 +347,11 @@ static int cmd_join(const params_t *params)
 
     if (!params->file1.exists || !params->file2.exists) {
         fprintf(stderr, "%s: both FILE1 and FILE2 must exist\n", APP_NAME);
+        return EXIT_FAILURE;
+    }
+
+    if (strcmp(params->file1.path, params->output.path) != 0) {
+        fprintf(stderr, "%s: FILEs and OUTPUT must be in the same directory\n", APP_NAME);
         return EXIT_FAILURE;
     }
 
@@ -454,7 +468,7 @@ static void parse_args(int argc, char **argv, params_t *params)
             break;
         case MODE_JOIN:
             if (params->output.name[0] == '\0') {
-                fprintf(stderr, "%s: --join requires -o/--output NAME\n", APP_NAME);
+                fprintf(stderr, "%s: --join requires -o/--output FILE\n", APP_NAME);
                 exit(EXIT_FAILURE);
             }
             if (optind + 1 >= argc) {

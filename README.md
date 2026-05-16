@@ -21,8 +21,8 @@ Main features:
 
 Operation modes:
 
-* Online: concurrent read/write access to the journal by multiple threads.
-* Offline: maintenance operations (check, repair, split, join).
+* Online: 1-thread writes (append, check, rollback), N-threads reads (read, range).
+* Offline: maintenance operations (split, join).
 
 ## File format
 

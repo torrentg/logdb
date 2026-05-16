@@ -25,8 +25,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef JOURNAL_H
-#define JOURNAL_H
+#ifndef LDB_JOURNAL_H
+#define LDB_JOURNAL_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -96,7 +96,7 @@ SOFTWARE.
  * File read ops are done with [dat|idx]_fd.
  * 
  * We use 2 mutex:
- *   - data mutex: Ensures data integrity ([first|last]_seqnum)
+ *   - data mutex: Ensures data integrity ([min|max]_seqnum)
  *                 Reduced scope (variables update)
  *   - file mutex: Ensures no reads are done during destructive writes
  *                 Extended scope (function execution)
@@ -107,6 +107,7 @@ SOFTWARE.
  *               ┌ open()         -       -     Initialize mutexes, create FILEs used to write and fds used to read
  *               ├ append()       -       W     dat and idx files flushed at the end. State updated after flush.
  * thread-write: ┼ rollback()     W       W     
+ *               ├ check()        W       W     
  *               └ close()        -       -     Destroy mutexes, close files
  *               ┌ range()        R       R     
  * thread-read:  ┼ read()         R       R     
@@ -137,10 +138,10 @@ SOFTWARE.
 #define LDB_ERR_READ_IDX         -18
 #define LDB_ERR_WRITE_DAT        -19
 #define LDB_ERR_WRITE_IDX        -20
-#define LDB_ERR_ENTRY_SEQNUM     -21
-#define LDB_ERR_ENTRY_DATA       -22
-#define LDB_ERR_NOT_FOUND        -23
-#define LDB_ERR_CHECKSUM         -24
+#define LDB_ERR_SEQNUM           -21
+#define LDB_ERR_NODATA           -22
+#define LDB_ERR_CHECKSUM         -23
+#define LDB_ERR_NOT_FOUND        -24
 #define LDB_ERR_LOCK             -25
 
 #define LDB_OPEN_CREATE          (1 << 0)   // Create journal if it does not exist (default: false)
@@ -169,14 +170,6 @@ typedef struct ldb_range_t {
     uint64_t min_seqnum;          // Minimum sequence number (0 means no entries).
     uint64_t max_seqnum;          // Maximum sequence number (0 means no entries).
 } ldb_range_t;
-
-/**
- * Callback type used by ldb_check() to report each issue found or repair action taken.
- *
- * @param[in] msg  Human-readable description of the issue or repair action.
- * @param[in] data Opaque pointer passed through from ldb_check().
- */
-typedef void (*ldb_check_cb)(const char *msg, void *data);
 
 /**
  * Returns ldb library version.
@@ -352,19 +345,12 @@ long ldb_rollback(ldb_journal_t *obj, uint64_t seqnum);
 /**
  * Checks (and optionally repairs) the integrity of a journal.
  *
- * If repair is false the journal is opened read-only (no lock is acquired). 
- * Otherwise the journal is opened in read-write mode with an exclusive lock.
- *
- * The callback cb (if not NULL) is invoked once for every issue detected and
- * once for every repair action taken, with a human-readable description.
+ * If repair is true, the journal must not be open in read-only mode.
  *
  *   Data file issue                              Repairable
  *   -------------------------------------------  ----------
- *   File not found or cannot be opened           No
- *   File locked by another process               Retry after closing external process
- *   Invalid header (magic number or format)      No
  *   Checksum mismatch in a record (+)            Yes (zeroed)
- *   Non-consecutive sequence numbers             No
+ *   Non-consecutive sequence numbers             Yes (zeroed)
  *   Trailing data after last valid record        Yes (zeroed)
  * 
  * (+) The checksum covers both the record header and its data. 
@@ -373,25 +359,22 @@ long ldb_rollback(ldb_journal_t *obj, uint64_t seqnum);
  * 
  *   Index file issue                             Repairable
  *   -------------------------------------------  ----------
- *   File not found or cannot be opened           No
- *   File locked by another process               Retry after closing external process
- *   Invalid header (magic number or format)      No
  *   Index seqnum mismatch with dat               Yes (rebuilt)
  *   Sequence gap in index records                Yes (rebuilt)
  *   Index entry position out of bounds           Yes (rebuilt)
  *   Missing index records                        Yes (rebuilt)
  *   Trailing data after last valid record        Yes (zeroed)
  *
- * @param[in] path   Directory where journal files are located.
- * @param[in] name   Journal name.
+ * @param[in] obj    Open journal to check.
  * @param[in] repair If true, attempt to repair detected issues.
- * @param[in] cb     Optional callback invoked for each issue/repair message.
- * @param[in] data   Opaque pointer forwarded to cb.
+ *                   Requires journal not opened in read-only mode.
  *
  * @return LDB_OK if the journal is consistent (or was successfully repaired),
+ *         LDB_ERR_ARG if obj is NULL,
+ *         LDB_ERR_READONLY if repair is true but journal is read-only,
  *         otherwise an error code.
  */
-int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, void *user_data);
+int ldb_check(ldb_journal_t *obj, bool repair);
 
 /**
  * Splits a journal into two journals at the given sequence number.
@@ -546,28 +529,8 @@ class journal_t
         return ldb_rollback(m_journal, seqnum);
     }
 
-    static int check(const std::filesystem::path &path, const std::string &name, bool repair, std::function<void(const char*)> cb = nullptr)
-    {
-        if (!cb)
-            return ldb_check(path.c_str(), name.c_str(), repair, nullptr, nullptr);
-
-        auto trampoline = [](const char *msg, void *data) noexcept {
-            (*static_cast<std::function<void(const char*)>*>(data))(msg);
-        };
-
-        return ldb_check(path.c_str(), name.c_str(), repair, trampoline, &cb);
-    }
-
-    static int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum,
-                     const std::string &name_a, const std::string &name_b)
-    {
-        return ldb_split(path.c_str(), name.c_str(), seqnum, name_a.c_str(), name_b.c_str());
-    }
-
-    static int join(const std::filesystem::path &path, const std::string &name1,
-                    const std::string &name2, const std::string &name)
-    {
-        return ldb_join(path.c_str(), name1.c_str(), name2.c_str(), name.c_str());
+    int check(bool repair = false) {
+        return ldb_check(m_journal, repair);
     }
 
   private:
@@ -575,8 +538,18 @@ class journal_t
     ldb_journal_t *m_journal = nullptr;
 };
 
+int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum, const std::string &name_a, const std::string &name_b)
+{
+    return ldb_split(path.c_str(), name.c_str(), seqnum, name_a.c_str(), name_b.c_str());
+}
+
+int join(const std::filesystem::path &path, const std::string &name1, const std::string &name2, const std::string &name)
+{
+    return ldb_join(path.c_str(), name1.c_str(), name2.c_str(), name.c_str());
+}
+
 } // namespace ldb
 
 #endif
 
-#endif /* JOURNAL_H */
+#endif /* LDB_JOURNAL_H */

@@ -192,10 +192,10 @@ const char * ldb_strerror(int errnum)
         case LDB_ERR_READ_IDX:          return "Error reading idx file";
         case LDB_ERR_WRITE_DAT:         return "Error writing to dat file";
         case LDB_ERR_WRITE_IDX:         return "Error writing to idx file";
-        case LDB_ERR_ENTRY_SEQNUM:      return "Broken sequence";
-        case LDB_ERR_ENTRY_DATA:        return "Data not found";
-        case LDB_ERR_NOT_FOUND:         return "No results";
+        case LDB_ERR_SEQNUM:            return "Broken sequence";
+        case LDB_ERR_NODATA:            return "Data not found";
         case LDB_ERR_CHECKSUM:          return "Checksum mismatch";
+        case LDB_ERR_NOT_FOUND:         return "No results";
         case LDB_ERR_LOCK:              return "Error locking file";
         default:                        return "Unknown error";
     }
@@ -629,7 +629,7 @@ static uint32_t ldb_checksum_entry(ldb_entry_t *entry)
     checksum = ldb_crc32((const char *) &entry->data_len, sizeof(entry->data_len), checksum);
 
     if (entry->data_len && entry->data)
-        checksum = ldb_crc32(entry->data, entry->data_len, checksum);
+        checksum = ldb_crc32((const char *) entry->data, entry->data_len, checksum);
 
     return checksum;
 }
@@ -649,10 +649,10 @@ static int ldb_append_entry_dat(ldb_impl_t *obj, ldb_range_t *state, ldb_entry_t
     static const char zeros[sizeof(uintptr_t)] = {0};
 
     if (entry->data_len != 0 && entry->data == NULL)
-        return LDB_ERR_ENTRY_DATA;
+        return LDB_ERR_NODATA;
 
     if (state->max_seqnum != 0 && entry->seqnum != state->max_seqnum + 1)
-        return LDB_ERR_ENTRY_SEQNUM;
+        return LDB_ERR_SEQNUM;
 
     ldb_record_dat_t record = {
         .seqnum = entry->seqnum,
@@ -1154,15 +1154,6 @@ END_FUNCTION:
     return ret;
 }
 
-#define notify(cb, user_data, fmt, ...) \
-    do { \
-        if (cb) { \
-            char msg[256]; \
-            snprintf(msg, sizeof(msg), fmt, ##__VA_ARGS__); \
-            cb(msg, user_data); \
-        } \
-    } while (0)
-
 #define goto_zeroize(file_pos) \
     do { \
         pos = file_pos; \
@@ -1170,29 +1161,21 @@ END_FUNCTION:
     } while (0)
 
 /**
- * Validates the data file of a journal.
- *
  * Scans all data records verifying checksums and sequence numbers.
  * If repair is true and trailing data is detected, it is zeroed out.
  * Non-repairable errors (checksum, seqnum gap) are returned regardless of repair.
  *
- * This function does not use ldb_open_dat() because can hide some checks.
- * 
- * @pre Requires obj->dat_fp to be valid.
+ * @pre Requires obj->dat_fp to be valid and caller holds mutex_files.
  *
  * @param[in]  obj       Journal to validate.
  * @param[in]  repair    If true, attempt to repair trailing dat data.
- * @param[in]  cb        Optional callback invoked for each issue found.
- * @param[in]  user_data Opaque pointer forwarded to cb.
  *
  * @return Error code (0 = OK, data file is consistent).
  */
-static int ldb_check_dat(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *user_data)
+static int ldb_check_dat(ldb_impl_t *obj, bool repair)
 {
-    ssize_t rc = 0;
     int ret = LDB_OK;
-    int dat_fd = -1;
-    ldb_header_dat_t header = {0};
+    int dat_fd = fileno(obj->dat_fp);
     ldb_record_dat_t record_dat = {0};
     size_t pos = sizeof(ldb_header_dat_t);
     size_t dat_len = 0;
@@ -1201,49 +1184,6 @@ static int ldb_check_dat(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
     bool is_repaired = false;
 
     ldb_reset_state(&obj->state);
-
-    if (access(obj->dat_path, F_OK) != 0) {
-        notify(cb, user_data, "%s", "data file not found");
-        return LDB_ERR_NOFILE_DAT;
-    }
-
-    obj->dat_fp = fopen(obj->dat_path, obj->read_only ? "r" : "r+");
-
-    if (obj->dat_fp == NULL) {
-        notify(cb, user_data, "%s", "data file cannot be opened");
-        return LDB_ERR_OPEN_DAT;
-    }
-
-    dat_fd = fileno(obj->dat_fp);
-
-    if (!obj->read_only && flock(dat_fd, LOCK_EX | LOCK_NB) == -1) {
-        notify(cb, user_data, "%s", "data file is locked by another process");
-        return LDB_ERR_LOCK;
-    }
-
-    rc = pread(dat_fd, &header, sizeof(ldb_header_dat_t), 0);
-
-    if (rc == -1) {
-        notify(cb, user_data, "%s", ldb_strerror(LDB_ERR_READ_DAT));
-        exit_function(LDB_ERR_READ_DAT);
-    }
-
-    if (rc != (ssize_t) sizeof(ldb_header_dat_t)) {
-        notify(cb, user_data, "%s", "invalid data file header (too short)");
-        return LDB_ERR_INVL_DAT;
-    }
-
-    if (header.magic_number != LDB_DAT_MAGIC_NUMBER) {
-        notify(cb, user_data, "%s", "invalid data file header (bad magic number)");
-        return LDB_ERR_INVL_DAT;
-    }
-
-    if (header.format != LDB_FILE_FORMAT) {
-        notify(cb, user_data, "%s", "invalid data file header (bad format)");
-        return LDB_ERR_INVL_DAT;
-    }
-
-    obj->format = header.format;
     obj->dat_end = pos;
 
     dat_len = ldb_get_file_size(obj->dat_fp);
@@ -1255,7 +1195,6 @@ static int ldb_check_dat(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
 
         if (ret != LDB_OK && ret != LDB_ERR_CORRUPT_DAT && ret != LDB_ERR_CHECKSUM) {
             has_issues = true;
-            notify(cb, user_data, "%s", ldb_strerror(ret));
             exit_function(ret);
         }
 
@@ -1270,16 +1209,13 @@ static int ldb_check_dat(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
         else if (ret == LDB_ERR_CHECKSUM)
         {
             has_issues = true;
-            notify(cb, user_data, "checksum mismatch at offset %zu", pos);
             goto_zeroize(pos);
         }
 
         if (prev_seqnum != 0 && record_dat.seqnum != prev_seqnum + 1)
         {
             has_issues = true;
-            notify(cb, user_data, "sequence gap at offset %zu: expected %lu got %lu", 
-                pos, prev_seqnum + 1, record_dat.seqnum);
-            exit_function(LDB_ERR_CORRUPT_DAT);
+            goto_zeroize(pos);
         }
 
         prev_seqnum = record_dat.seqnum;
@@ -1300,14 +1236,15 @@ ZEROIZE:
         exit_function(LDB_OK);
 
     has_issues = true;
-    notify(cb, user_data, "journal has trailing data at offset %zu", pos);
 
     if (repair)
     {
+        if (obj->read_only)
+            exit_function(LDB_ERR_READONLY);
+
         if (!ldb_zeroize(obj->dat_fp, pos))
             exit_function(LDB_ERR_WRITE_DAT);
 
-        notify(cb, user_data, "%s", "journal trailing data zeroized");
         is_repaired = true;
     }
 
@@ -1329,18 +1266,15 @@ END_FUNCTION:
  *
  * @param[in]  obj       Journal to validate.
  * @param[in]  repair    If true, rebuild the index file on any mismatch.
- * @param[in]  cb        Optional callback invoked for each issue found.
- * @param[in]  user_data Opaque pointer forwarded to cb.
  *
  * @return Error code (0 = OK, index file is consistent).
  */
-static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *user_data)
+static int ldb_check_idx(ldb_impl_t *obj, bool repair)
 {
     ssize_t rc = 0;
     int ret = LDB_OK;
-    int dat_fd = -1;
-    int idx_fd = -1;
-    ldb_header_idx_t header = {0};
+    int dat_fd = fileno(obj->dat_fp);
+    int idx_fd = fileno(obj->idx_fp);
     ldb_record_dat_t record_dat = {0};
     ldb_record_idx_t record_idx = {0};
     size_t pos = sizeof(ldb_header_idx_t);
@@ -1350,49 +1284,6 @@ static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
     uint64_t min_seqnum = 0;
     bool has_issues = false;
     bool is_repaired = false;
-
-    if (access(obj->idx_path, F_OK) != 0) {
-        has_issues = true;
-        notify(cb, user_data, "%s", "index file not found");
-        exit_function(LDB_ERR_NOFILE_IDX);
-    }
-
-    obj->idx_fp = fopen(obj->idx_path, obj->read_only ? "r" : "r+");
-
-    if (obj->idx_fp == NULL) {
-        notify(cb, user_data, "%s", "index file cannot be opened");
-        return LDB_ERR_OPEN_IDX;
-    }
-
-    dat_fd = fileno(obj->dat_fp);
-    idx_fd = fileno(obj->idx_fp);
-
-    if (!obj->read_only && flock(idx_fd, LOCK_EX | LOCK_NB) == -1) {
-        notify(cb, user_data, "%s", "index file is locked by another process");
-        return LDB_ERR_LOCK;
-    }
-
-    rc = pread(idx_fd, &header, sizeof(ldb_header_idx_t), 0);
-
-    if (rc == -1) {
-        notify(cb, user_data, "%s", ldb_strerror(LDB_ERR_READ_IDX));
-        return LDB_ERR_READ_IDX;
-    }
-
-    if (rc != (ssize_t) sizeof(ldb_header_idx_t)) {
-        notify(cb, user_data, "%s", "invalid index file header (too short)");
-        return LDB_ERR_INVL_IDX;
-    }
-
-    if (header.magic_number != LDB_IDX_MAGIC_NUMBER) {
-        notify(cb, user_data, "%s", "invalid index file header (bad magic number)");
-        return LDB_ERR_INVL_IDX;
-    }
-
-    if (header.format != LDB_FILE_FORMAT) {
-        notify(cb, user_data, "%s", "invalid index file header (bad format)");
-        return LDB_ERR_INVL_IDX;
-    }
 
     dat_len = ldb_get_file_size(obj->dat_fp);
     idx_len = ldb_get_file_size(obj->idx_fp);
@@ -1410,7 +1301,6 @@ static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
 
         if (rc == -1) {
             has_issues = true;
-            notify(cb, user_data, "%s", ldb_strerror(LDB_ERR_READ_IDX));
             exit_function(LDB_ERR_READ_IDX);
         }
 
@@ -1423,7 +1313,6 @@ static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
         if (record_idx.pos < sizeof(ldb_header_dat_t) || record_idx.pos > dat_len)
         {
             has_issues = true;
-            notify(cb, user_data, "invalid idx entry at offset %zu (pos out of bounds)", pos);
             exit_function(LDB_ERR_CORRUPT_IDX);
         }
 
@@ -1432,14 +1321,12 @@ static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
         if (ret != LDB_OK)
         {
             has_issues = true;
-            notify(cb, user_data, "invalid idx entry at offset %zu (pos error)", pos);
             exit_function(LDB_ERR_CORRUPT_IDX);
         }
 
         if (record_dat.seqnum != min_seqnum + count)
         {
             has_issues = true;
-            notify(cb, user_data, "invalid idx entry at offset %zu (seqnum mismatch)", pos);
             exit_function(LDB_ERR_CORRUPT_IDX);
         }
 
@@ -1453,7 +1340,6 @@ static int ldb_check_idx(ldb_impl_t *obj, bool repair, ldb_check_cb cb, void *us
     if (min_seqnum + count - 1 != obj->state.max_seqnum)
     {
         has_issues = true;
-        notify(cb, user_data, "invalid idx entry at offset %zu (missing records after seqnum %zu)", pos, (size_t)(min_seqnum + count - 1));
         exit_function(LDB_ERR_CORRUPT_IDX);
     }
 
@@ -1461,14 +1347,14 @@ ZEROIZE:
     if (ldb_is_zeroized(obj->idx_fp, pos))
         return LDB_OK;
 
-    notify(cb, user_data, "index has trailing data at offset %zu", pos);
-
     if (repair)
     {
+        if (obj->read_only)
+            return LDB_ERR_READONLY;
+
         if (!ldb_zeroize(obj->idx_fp, pos))
             return LDB_ERR_WRITE_IDX;
 
-        notify(cb, user_data, "%s", "index trailing data zeroized");
         return LDB_OK;
     }
 
@@ -1477,42 +1363,45 @@ ZEROIZE:
 END_FUNCTION:
     if (has_issues && repair && !is_repaired)
     {
-        if ((ret = ldb_rebuild_idx(obj)) == LDB_OK) {
-            notify(cb, user_data, "%s", "index rebuilt successfully");
-            is_repaired = true;
+        if (obj->read_only)
+        {
+            ret = LDB_ERR_READONLY;
         }
-        else {
-            notify(cb, user_data, "index rebuild failed (%s)", ldb_strerror(ret));
+        else if ((ret = ldb_rebuild_idx(obj)) == LDB_OK)
+        {
+            is_repaired = true;
         }
     }
 
     return (has_issues ? (is_repaired ? LDB_OK : ret) : LDB_OK);
 }
 
-int ldb_check(const char *path, const char *name, bool repair, ldb_check_cb cb, void *user_data)
+int ldb_check(ldb_journal_t *obj, bool repair)
 {
+    if (!obj)
+        return LDB_ERR_ARG;
+
+    if (!ldb_is_valid_obj(obj))
+        return LDB_ERR;
+
+    pthread_mutex_lock(&obj->mutex_files);
+    pthread_mutex_lock(&obj->mutex_state);
+
     int ret = LDB_OK;
-    ldb_impl_t obj = {0};
-    int flags = (repair ? 0 : LDB_OPEN_READONLY);
 
-    if ((ret = ldb_init(&obj, path, name, flags)) != LDB_OK) {
-        notify(cb, user_data, "%s", ldb_strerror(ret));
-        exit_function(ret);
-    }
+    if ((ret = ldb_check_dat(obj, repair)) != LDB_OK)
+        goto END_FUNCTION;
 
-    if ((ret = ldb_check_dat(&obj, repair, cb, user_data)) != LDB_OK)
-        exit_function(ret);
-
-    if ((ret = ldb_check_idx(&obj, repair, cb, user_data)) != LDB_OK)
-        exit_function(ret);
+    if ((ret = ldb_check_idx(obj, repair)) != LDB_OK)
+        goto END_FUNCTION;
 
 END_FUNCTION:
-    ldb_close(&obj);
+    pthread_mutex_unlock(&obj->mutex_state);
+    pthread_mutex_unlock(&obj->mutex_files);
     return ret;
 }
 
 #undef goto_zeroize
-#undef notify
 
 int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *name_a, const char *name_b)
 {
@@ -1675,7 +1564,7 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
     // check consecutiveness only when both journals have entries
     if (obj1.state.min_seqnum != 0 && obj2.state.min_seqnum != 0) {
         if (obj1.state.max_seqnum + 1 != obj2.state.min_seqnum)
-            exit_function(LDB_ERR_ENTRY_SEQNUM);
+            exit_function(LDB_ERR_SEQNUM);
     }
 
     if ((fp_out = fopen(filename_out, "wx")) == NULL)
@@ -1746,8 +1635,7 @@ int ldb_open(ldb_impl_t *obj, const char *path, const char *name, int flags)
         if (!(flags & LDB_OPEN_CREATE))
             exit_function(LDB_ERR_NOFILE_DAT);
 
-        if (flags & LDB_OPEN_READONLY)
-            exit_function(LDB_ERR_NOFILE_DAT);
+        // READONLY does not apply in this case
 
         if (!ldb_create_dat(obj->dat_path))
             exit_function(LDB_ERR_CREATE_DAT);

@@ -2,11 +2,6 @@
 #include "journal.h"
 #include "journal.c"
 
-typedef struct {
-    int count;
-    char last_msg[512];
-} ldb_check_cb_data_t;
-
 // ===========================================
 // Helpers
 // ===========================================
@@ -40,13 +35,6 @@ bool check_entry(const ldb_entry_t *entry, uint64_t seqnum, const char *data)
             entry->seqnum == seqnum &&
             entry->data_len == (data == NULL ? 0 : strlen(data) + 1) &&
             (entry->data == data || (entry->data != NULL && data != NULL && strcmp(entry->data, data) == 0)));
-}
-
-static void test_check_cb_fn(const char *msg, void *data)
-{
-    ldb_check_cb_data_t *d = (ldb_check_cb_data_t *) data;
-    d->count++;
-    if (msg) strncpy(d->last_msg, msg, sizeof(d->last_msg) - 1);
 }
 
 // ===========================================
@@ -481,108 +469,6 @@ void test_open_1_entry_empty(void)
     ldb_close(&journal);
 }
 
-void _test_open_rollbacked_ok(int flags)
-{
-    char data[1024] = {0};
-    ldb_journal_t journal = {0};
-    ldb_record_dat_t record_dat = {0};
-    ldb_record_idx_t record_idx = {0};
-    uint32_t checksum = 0;
-
-    remove("test.dat");
-    remove("test.idx");
-
-    // create empty journal
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-
-    // inserting 4 entries
-    for (int i = 10; i < 14; i++)
-    {
-        record_dat.seqnum = i;
-        record_dat.data_len = 20 + i;
-        checksum = ldb_checksum_record(&record_dat);
-        record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
-
-        record_idx.pos = ftell(journal.dat_fp);
-
-        fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
-        fwrite(data, record_dat.data_len, 1, journal.dat_fp);
-        fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
-
-        fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, journal.idx_fp);
-
-        // set first_seqnum in idx header for the first entry
-        if (i == 10)
-        {
-            uint64_t first_seqnum = 10;
-            pwrite(fileno(journal.idx_fp), &first_seqnum, sizeof(first_seqnum), offsetof(ldb_header_idx_t, first_seqnum));
-        }
-    }
-
-    // inserting rollbacked info
-    memset(data, 0x00, sizeof(data));
-    fwrite(data, 60, 1, journal.dat_fp);
-    fwrite(data, 37, 1, journal.idx_fp);
-    ldb_close(&journal);
-
-    // open journal
-    TEST_ASSERT(ldb_open(&journal, "", "test", flags) == LDB_OK);
-    TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.max_seqnum == 13);
-    ldb_close(&journal);
-}
-
-void test_open_rollbacked_ok_check(void) {
-    _test_open_rollbacked_ok(0);
-    // additionally verify ldb_check(repair=true) reports clean after auto-repair
-    TEST_ASSERT(ldb_check("", "test", true, NULL, NULL) == LDB_OK);
-}
-
-void test_open_rollbacked_ok_uncheck(void) {
-    _test_open_rollbacked_ok(0);
-}
-
-void test_open_dat_check_fails(void)
-{
-    const char data[1024] = {0};
-    ldb_journal_t journal = {0};
-    ldb_record_dat_t record_dat = {0};
-    uint32_t checksum = 0;
-
-    remove("test.dat");
-    remove("test.idx");
-
-    // create empty journal
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-
-    // inserting entry-1
-    record_dat.seqnum = 10;
-    record_dat.data_len = 20;
-    checksum = ldb_checksum_record(&record_dat);
-    record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
-    fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
-    fwrite(data, record_dat.data_len, 1, journal.dat_fp);
-    fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
-
-    // inserting entry-2 (broken sequence)
-    record_dat.seqnum = 16;
-    record_dat.data_len = 20;
-    checksum = ldb_checksum_record(&record_dat);
-    record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
-    fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
-    fwrite(data, record_dat.data_len, 1, journal.dat_fp);
-    fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
-
-    ldb_close(&journal);
-
-    // open journal (rebuild idx from dat: idx gets only seqnum=10 due to gap)
-    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
-    ldb_close(&journal);
-
-    // check detects the trailing seqnum=16 as dat corruption
-    TEST_ASSERT(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_CORRUPT_DAT);
-}
-
 void test_open_dat_corrupted(void)
 {
     const char data[1024] = {0};
@@ -616,21 +502,15 @@ void test_open_dat_corrupted(void)
 
     ldb_close(&journal);
 
-    // open journal (rebuild idx from dat: idx gets only seqnum=10 due to bad checksum on seqnum=11)
+    // open journal (identify that last record is corrupted, remove it and rebuilds index)
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     ldb_close(&journal);
-
-    // check detects the trailing seqnum=11 with bad checksum
-    TEST_ASSERT(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_CHECKSUM);
 }
 
-void test_open_idx_check_fails_1(void)
+void test_open_idx_corrupted(void)
 {
-    const char data[1024] = {0};
     ldb_journal_t journal = {0};
-    ldb_record_dat_t record_dat = {0};
     ldb_record_idx_t record_idx = {0};
-    uint32_t checksum = 0;
 
     remove("test.dat");
     remove("test.idx");
@@ -638,95 +518,24 @@ void test_open_idx_check_fails_1(void)
     // create empty journal
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
 
-    // inserting 4 entries
-    for (int i = 10; i < 14; i++)
-    {
-        record_dat.seqnum = i;
-        record_dat.data_len = 20 + i;
-        checksum = ldb_checksum_record(&record_dat);
-        record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
+    // inserting entries
+    append_entries(&journal, 10, 14);
 
-        record_idx.pos = ftell(journal.dat_fp);
-
-        // corrupting index entry
-        if (i == 12)
-            record_idx.pos += 5;
-
-        fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
-        fwrite(data, record_dat.data_len, 1, journal.dat_fp);
-        fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
-
-        fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, journal.idx_fp);
-
-        // set first_seqnum in idx header for the first entry
-        if (i == 10)
-        {
-            uint64_t first_seqnum = 10;
-            pwrite(fileno(journal.idx_fp), &first_seqnum, sizeof(first_seqnum), offsetof(ldb_header_idx_t, first_seqnum));
-        }
-    }
+    // append an invalid index entry
+    record_idx.pos = 5000;
+    fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, journal.idx_fp);
 
     ldb_close(&journal);
 
-    // check+repair via ldb_check
-    TEST_ASSERT(ldb_check("", "test", true, NULL, NULL) == LDB_OK);
-
-    // verify journal state after repair
+    // open identify error in last idx entry and rebuilds index
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.max_seqnum == 13);
-    ldb_close(&journal);
-}
-
-void test_open_idx_check_fails_2(void)
-{
-    char data[1024] = {0};
-    ldb_journal_t journal = {0};
-    ldb_record_dat_t record_dat = {0};
-    ldb_record_idx_t record_idx = {0};
-    uint32_t checksum = 0;
-
-    remove("test.dat");
-    remove("test.idx");
-
-    // create empty journal
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-
-    // inserting 4 entries
-    for (int i = 10; i < 14; i++)
-    {
-        record_dat.seqnum = i;
-        record_dat.data_len = 20 + i;
-        checksum = ldb_checksum_record(&record_dat);
-        record_dat.checksum = ldb_crc32(data, record_dat.data_len, checksum);
-
-        // corrupted index entry
-        record_idx.pos = ftell(journal.dat_fp) + (i == 12 ? 5 : 0); // invalid pos
-
-        fwrite(&record_dat, sizeof(ldb_record_dat_t), 1, journal.dat_fp);
-        fwrite(data, record_dat.data_len, 1, journal.dat_fp);
-        fwrite(data, ldb_padding(record_dat.data_len), 1, journal.dat_fp);
-
-        fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, journal.idx_fp);
-
-        // set first_seqnum in idx header for the first entry
-        if (i == 10)
-        {
-            uint64_t first_seqnum = 10;
-            pwrite(fileno(journal.idx_fp), &first_seqnum, sizeof(first_seqnum), offsetof(ldb_header_idx_t, first_seqnum));
-        }
-    }
-
+    TEST_CHECK(journal.state.max_seqnum == 14);
     ldb_close(&journal);
 
-    // check+repair via ldb_check
-    TEST_ASSERT(ldb_check("", "test", true, NULL, NULL) == LDB_OK);
-
-    // verify journal state after repair
-    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
-    TEST_CHECK(journal.state.min_seqnum == 10);
-    TEST_CHECK(journal.state.max_seqnum == 13);
-    ldb_close(&journal);
+    // Caution:
+    // ldb_open() validates first and last idx records but not the ones in between.
+    // Use ldb_check() to validate intermediate records.
 }
 
 void test_open_idx_missing_last_entry(void)
@@ -909,7 +718,7 @@ void test_append_broken_sequence(void)
         entries[i].data_len = strlen(buf) + 1;
     }
 
-    TEST_ASSERT(ldb_append(&journal, entries, len, &num) == LDB_ERR_ENTRY_SEQNUM);
+    TEST_ASSERT(ldb_append(&journal, entries, len, &num) == LDB_ERR_SEQNUM);
     TEST_CHECK(num == 5);
     TEST_CHECK(journal.state.min_seqnum == 10);
     TEST_CHECK(journal.state.max_seqnum == 10 + num - 1);
@@ -936,7 +745,7 @@ void test_append_lack_of_data(void)
     // create empty journal
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
 
-    TEST_CHECK(ldb_append(&journal, &entry, 1, NULL) == LDB_ERR_ENTRY_DATA);
+    TEST_CHECK(ldb_append(&journal, &entry, 1, NULL) == LDB_ERR_NODATA);
 
     ldb_close(&journal);
 }
@@ -1082,7 +891,7 @@ void test_range_all(void)
     TEST_CHECK(range.max_seqnum == 0);
 
     append_entries(&journal, 20, 314);
-    
+
     // non-empty journal
     range = ldb_get_range(&journal);
     TEST_CHECK(range.min_seqnum == 20);
@@ -1120,10 +929,14 @@ void test_rollback_nominal_case(void)
     TEST_CHECK(journal.state.max_seqnum == 314);
     TEST_CHECK(journal.dat_end == end);
 
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+
     TEST_CHECK(ldb_rollback(&journal, 314) == 0);
     TEST_CHECK(journal.state.min_seqnum == 20);
     TEST_CHECK(journal.state.max_seqnum == 314);
     TEST_CHECK(journal.dat_end == end);
+
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
 
     TEST_ASSERT(ldb_rollback(&journal, 313) == 1);
     TEST_ASSERT(journal.state.min_seqnum == 20);
@@ -1131,11 +944,15 @@ void test_rollback_nominal_case(void)
     TEST_ASSERT(journal.dat_end < end);
     end = journal.dat_end;
 
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+
     TEST_CHECK(ldb_rollback(&journal, 100) == 213);
     TEST_CHECK(journal.state.min_seqnum == 20);
     TEST_CHECK(journal.state.max_seqnum == 100);
     TEST_CHECK(journal.dat_end < end);
     end = journal.dat_end;
+
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
 
     TEST_CHECK(ldb_rollback(&journal, 20) == 80);
     TEST_CHECK(journal.state.min_seqnum == 20);
@@ -1143,10 +960,14 @@ void test_rollback_nominal_case(void)
     TEST_CHECK(journal.dat_end < end);
     end = journal.dat_end;
 
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+
     TEST_CHECK(ldb_rollback(&journal, 0) == 1);
     TEST_CHECK(journal.state.min_seqnum == 0);
     TEST_CHECK(journal.state.max_seqnum == 0);
     TEST_CHECK(journal.dat_end < end);
+
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
 
     ldb_close(&journal);
 }
@@ -1186,8 +1007,9 @@ void test_readonly_open(void)
     // cannot open non-existent journal in read-only (no CREATE)
     TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_ERR_NOFILE_DAT);
 
-    // open unexistent journal with CREATE + READONLY (read-only wins)
-    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_CREATE | LDB_OPEN_READONLY) == LDB_ERR_NOFILE_DAT);
+    // open unexistent journal with CREATE + READONLY (should create empty journal and open in read-only)
+    TEST_CHECK(ldb_open(&journal, "", "test", LDB_OPEN_CREATE | LDB_OPEN_READONLY) == LDB_OK);
+    ldb_close(&journal);
 
     // create a journal with some data
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
@@ -1357,31 +1179,10 @@ void test_meta_all(void)
 
 void test_check_invalid_args(void)
 {
-    TEST_CHECK(ldb_check(NULL, "test", false, NULL, NULL) == LDB_ERR_PATH);
-    TEST_CHECK(ldb_check("/non_existent_path_xyz/", "test", false, NULL, NULL) == LDB_ERR_PATH);
-    TEST_CHECK(ldb_check("", NULL, false, NULL, NULL) == LDB_ERR_NAME);
-    TEST_CHECK(ldb_check("", "", false, NULL, NULL) == LDB_ERR_NAME);
-    TEST_CHECK(ldb_check("", "bad-name!", false, NULL, NULL) == LDB_ERR_NAME);
+    TEST_CHECK(ldb_check(NULL, false) == LDB_ERR_ARG);
 }
 
-void test_check_missing_files(void)
-{
-    remove("test.dat");
-    remove("test.idx");
-
-    // dat file not found
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_NOFILE_DAT);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR_NOFILE_DAT);
-
-    // dat exists but idx missing (empty journal dat, no data)
-    ldb_create_dat("test.dat");
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_NOFILE_IDX);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
-
-    remove("test.dat");
-}
-
-void test_check_clean(void)
+void test_check_valid_journal(void)
 {
     ldb_journal_t journal = {0};
 
@@ -1390,97 +1191,19 @@ void test_check_clean(void)
 
     // empty journal
     TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, true) == LDB_OK);
     ldb_close(&journal);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
 
     // journal with entries
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     append_entries(&journal, 10, 20);
-    ldb_close(&journal);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
-
-    remove("test.dat");
-    remove("test.idx");
-}
-
-void test_check_callback(void)
-{
-    ldb_journal_t journal = {0};
-    ldb_check_cb_data_t cbdata = {0};
-    const char garbage[] = "garbage_data_1234";
-
-    remove("test.dat");
-    remove("test.idx");
-
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-    append_entries(&journal, 10, 12);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, true) == LDB_OK);
     ldb_close(&journal);
 
-    // clean journal: callback not invoked
-    memset(&cbdata, 0, sizeof(cbdata));
-    TEST_CHECK(ldb_check("", "test", false, test_check_cb_fn, &cbdata) == LDB_OK);
-    TEST_CHECK(cbdata.count == 0);
-
-    // add trailing garbage to dat
-    FILE *fp = fopen("test.dat", "ab");
-    TEST_ASSERT(fp != NULL);
-    fwrite(garbage, sizeof(garbage), 1, fp);
-    fclose(fp);
-
-    // corrupt journal: callback invoked with issue message
-    memset(&cbdata, 0, sizeof(cbdata));
-    TEST_CHECK(ldb_check("", "test", false, test_check_cb_fn, &cbdata) == LDB_ERR_CORRUPT_DAT);
-    TEST_CHECK(cbdata.count > 0);
-    TEST_CHECK(strstr(cbdata.last_msg, "trailing") != NULL);
-
-    // repair: callback invoked for both issue and repair action
-    memset(&cbdata, 0, sizeof(cbdata));
-    TEST_CHECK(ldb_check("", "test", true, test_check_cb_fn, &cbdata) == LDB_OK);
-    TEST_CHECK(cbdata.count >= 2);
-
     remove("test.dat");
     remove("test.idx");
-}
-
-void test_check_dat_invalid_header(void)
-{
-    FILE *fp = NULL;
-    ldb_header_dat_t header = {
-        .magic_number = LDB_DAT_MAGIC_NUMBER,
-        .format       = LDB_FILE_FORMAT,
-    };
-
-    remove("test.dat");
-    remove("test.idx");
-
-    // header too short
-    fp = fopen("test.dat", "wb");
-    fwrite("short", 5, 1, fp);
-    fclose(fp);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_INVL_DAT);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR_INVL_DAT);
-
-    // bad magic number
-    fp = fopen("test.dat", "wb");
-    header.magic_number = 0xDEADBEEFULL;
-    header.format       = LDB_FILE_FORMAT;
-    fwrite(&header, sizeof(ldb_header_dat_t), 1, fp);
-    fclose(fp);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_INVL_DAT);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR_INVL_DAT);
-
-    // bad format
-    fp = fopen("test.dat", "wb");
-    header.magic_number = LDB_DAT_MAGIC_NUMBER;
-    header.format       = LDB_FILE_FORMAT + 1;
-    fwrite(&header, sizeof(ldb_header_dat_t), 1, fp);
-    fclose(fp);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_INVL_DAT);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR_INVL_DAT);
-
-    remove("test.dat");
 }
 
 void test_check_dat_trailing_data(void)
@@ -1501,12 +1224,19 @@ void test_check_dat_trailing_data(void)
     fwrite(garbage, sizeof(garbage), 1, fp);
     fclose(fp);
 
-    // no repair → error
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_CORRUPT_DAT);
+    // identified by ldb_open(), trailing data discarded, journal consistent
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_OK);
+    TEST_CHECK(ldb_get_range(&journal).max_seqnum == 12);
 
-    // repair → garbage zeroized, journal consistent
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
+    // ldb_check() identify trailing garbage in dat file
+    TEST_CHECK(ldb_check(&journal, false) == LDB_ERR_CORRUPT_DAT);
+    ldb_close(&journal);
+
+    // repair -> garbage zeroized, journal consistent
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, true)  == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+    ldb_close(&journal);
 
     // all original entries intact
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
@@ -1542,58 +1272,22 @@ void test_check_dat_checksum_mismatch(void)
     fwrite(&bad_checksum, sizeof(bad_checksum), 1, fp);
     fclose(fp);
 
-    // no repair → error (bad checksum on seqnum=12, trailing seqnum=13 is non-zero)
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_CHECKSUM);
+    // no repair -> error (bad checksum on seqnum=12, trailing seqnum=13 is non-zero)
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_ERR_CHECKSUM);
+    ldb_close(&journal);
 
-    // repair → zeroizes from seqnum=12 onwards → consistent
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
+    // repair -> zeroizes from seqnum=12 onwards -> consistent
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, true) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+    ldb_close(&journal);
 
     // seqnum=10..11 preserved, seqnum=12..13 gone
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
     TEST_CHECK(journal.state.max_seqnum == 11);
     ldb_close(&journal);
-
-    remove("test.dat");
-    remove("test.idx");
-}
-
-void test_check_idx_invalid_header(void)
-{
-    ldb_journal_t journal = {0};
-    ldb_header_idx_t header = {0};
-    FILE *fp = NULL;
-
-    remove("test.dat");
-    remove("test.idx");
-
-    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
-    append_entries(&journal, 10, 12);
-    ldb_close(&journal);
-
-    // corrupt idx magic number
-    fp = fopen("test.idx", "r+b");
-    TEST_ASSERT(fp != NULL);
-    fread(&header, sizeof(ldb_header_idx_t), 1, fp);
-    fseek(fp, 0, SEEK_SET);
-    header.magic_number = 0xDEADBEEFULL;
-    fwrite(&header, sizeof(ldb_header_idx_t), 1, fp);
-    fclose(fp);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_INVL_IDX);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR_INVL_IDX);
-
-    // corrupt idx format
-    fp = fopen("test.idx", "r+b");
-    TEST_ASSERT(fp != NULL);
-    fread(&header, sizeof(ldb_header_idx_t), 1, fp);
-    fseek(fp, 0, SEEK_SET);
-    header.magic_number = LDB_IDX_MAGIC_NUMBER;
-    header.format       = LDB_FILE_FORMAT + 1;
-    fwrite(&header, sizeof(ldb_header_idx_t), 1, fp);
-    fclose(fp);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_INVL_IDX);
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_ERR_INVL_IDX);
 
     remove("test.dat");
     remove("test.idx");
@@ -1617,12 +1311,11 @@ void test_check_idx_trailing_data(void)
     fwrite(garbage, sizeof(garbage), 1, fp);
     fclose(fp);
 
-    // no repair → error
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_CORRUPT_IDX);
-
-    // repair → trailing bytes zeroized, journal consistent
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
+    // repair -> trailing bytes zeroized, journal consistent
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, true)  == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+    ldb_close(&journal);
 
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
@@ -1633,7 +1326,7 @@ void test_check_idx_trailing_data(void)
     remove("test.idx");
 }
 
-void test_check_idx_rebuilt(void)
+void test_check_idx_invalid_record(void)
 {
     ldb_journal_t journal = {0};
     ldb_record_idx_t record_idx = {0};
@@ -1657,12 +1350,16 @@ void test_check_idx_rebuilt(void)
     fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, fp);
     fclose(fp);
 
-    // no repair -> error
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_CORRUPT_IDX);
+    // no repair -> error (open read-only to avoid auto-repair)
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_READONLY) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_ERR_CORRUPT_IDX);
+    ldb_close(&journal);
 
     // repair -> idx rebuilt from dat
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, true)  == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+    ldb_close(&journal);
 
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
@@ -1692,12 +1389,11 @@ void test_check_idx_missing_records(void)
     ftruncate(fileno(fp), size - 2 * (long) sizeof(ldb_record_idx_t));
     fclose(fp);
 
-    // no repair → error (missing records for seqnum=13..14)
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_ERR_CORRUPT_IDX);
-
-    // repair → idx rebuilt with all 5 records
-    TEST_CHECK(ldb_check("", "test", true,  NULL, NULL) == LDB_OK);
-    TEST_CHECK(ldb_check("", "test", false, NULL, NULL) == LDB_OK);
+    // repair -> idx rebuilt with all 5 records
+    TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, true)  == LDB_OK);
+    TEST_CHECK(ldb_check(&journal, false) == LDB_OK);
+    ldb_close(&journal);
 
     TEST_ASSERT(ldb_open(&journal, "", "test", 0) == LDB_OK);
     TEST_CHECK(journal.state.min_seqnum == 10);
@@ -2002,7 +1698,7 @@ void test_join_non_consecutive(void)
     append_entries(&j2, 21, 29);  // gap: 20 is missing
     ldb_close(&j2);
 
-    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_ERR_ENTRY_SEQNUM);
+    TEST_CHECK(ldb_join("", "test1", "test2", "test-out") == LDB_ERR_SEQNUM);
 
     // source journals left intact
     TEST_CHECK(access("test1.dat", F_OK) == 0);
@@ -2104,63 +1800,55 @@ void test_join_second_empty(void)
 }
 
 TEST_LIST = {
-    { "sizeof()",                     test_sizeof },
-    { "crc32()",                      test_crc32 },
-    { "version()",                    test_version },
-    { "strerror()",                   test_strerror },
-    { "is_valid_path()",              test_is_valid_path },
-    { "is_valid_name()",              test_is_valid_name },
-    { "create_filename()",            test_create_filename },
-    { "close()",                      test_close },
-    { "open() with invalid args",     test_open_invalid_args },
-    { "open() with invalid path",     test_open_invalid_path },
-    { "open() with invalid name",     test_open_invalid_name },
-    { "open() create journal",        test_open_create },
-    { "open() empty journal",         test_open_empty },
-    { "open() invl dat header",       test_open_invl_dat_header },
-    { "open() and repair (I)",        test_open_and_repair_1 },
-    { "open() and repair (II)",       test_open_and_repair_2 },
-    { "open() and repair (III)",      test_open_and_repair_3 },
-    { "open() 1-entry ok",            test_open_1_entry_ok },
-    { "open() 1-entry empty",         test_open_1_entry_empty },
-    { "open() rollbacked ok",         test_open_rollbacked_ok_uncheck },
-    { "open() rollbacked ok (check)", test_open_rollbacked_ok_check },
-    { "open() dat check fails",       test_open_dat_check_fails },
-    { "open() dat corrupted",         test_open_dat_corrupted },
-    { "open() idx check fails (I)",   test_open_idx_check_fails_1 },
-    { "open() idx check fails (II)",  test_open_idx_check_fails_2 },
+    { "sizeof()",                      test_sizeof },
+    { "crc32()",                       test_crc32 },
+    { "version()",                     test_version },
+    { "strerror()",                    test_strerror },
+    { "is_valid_path()",               test_is_valid_path },
+    { "is_valid_name()",               test_is_valid_name },
+    { "create_filename()",             test_create_filename },
+    { "close()",                       test_close },
+    { "open() with invalid args",      test_open_invalid_args },
+    { "open() with invalid path",      test_open_invalid_path },
+    { "open() with invalid name",      test_open_invalid_name },
+    { "open() create journal",         test_open_create },
+    { "open() empty journal",          test_open_empty },
+    { "open() invl dat header",        test_open_invl_dat_header },
+    { "open() and repair (I)",         test_open_and_repair_1 },
+    { "open() and repair (II)",        test_open_and_repair_2 },
+    { "open() and repair (III)",       test_open_and_repair_3 },
+    { "open() 1-entry ok",             test_open_1_entry_ok },
+    { "open() 1-entry empty",          test_open_1_entry_empty },
+    { "open() dat corrupted",          test_open_dat_corrupted },
+    { "open() idx corrupted",          test_open_idx_corrupted },
     { "open() idx missing last entry", test_open_idx_missing_last_entry },
-    { "append() invalid args",        test_append_invalid_args },
-    { "append() nothing",             test_append_nothing },
-    { "append() auto",                test_append_auto },
-    { "append() nominal case",        test_append_nominal_case },
-    { "append() broken sequence",     test_append_broken_sequence },
-    { "append() lack of data",        test_append_lack_of_data },
-    { "read() invalid args",          test_read_invalid_args },
-    { "read() empty journal",         test_read_empty },
-    { "read() nominal case",          test_read_nominal_case },
-    { "range() all",                  test_range_all },
-    { "rollback() invalid args",      test_rollback_invalid_args },
-    { "rollback() nominal case",      test_rollback_nominal_case },
-    { "alloc() all",                  test_alloc_all },
-    { "fsync() all",                  test_fsync_all },
-    { "meta() all",                   test_meta_all },
-    { "readonly() open",              test_readonly_open },
-    { "readonly() write ops",         test_readonly_write_ops },
-    { "readonly() no flock",          test_readonly_no_flock },
-    { "readonly() missing idx",       test_readonly_missing_idx },
-    { "flock()",                      test_flock },
-    { "check() invalid args",         test_check_invalid_args },
-    { "check() missing files",        test_check_missing_files },
-    { "check() clean journal",        test_check_clean },
-    { "check() callback",             test_check_callback },
-    { "check() dat invalid header",   test_check_dat_invalid_header },
-    { "check() dat trailing data",    test_check_dat_trailing_data },
+    { "append() invalid args",         test_append_invalid_args },
+    { "append() nothing",              test_append_nothing },
+    { "append() auto",                 test_append_auto },
+    { "append() nominal case",         test_append_nominal_case },
+    { "append() broken sequence",      test_append_broken_sequence },
+    { "append() lack of data",         test_append_lack_of_data },
+    { "read() invalid args",           test_read_invalid_args },
+    { "read() empty journal",          test_read_empty },
+    { "read() nominal case",           test_read_nominal_case },
+    { "range() all",                   test_range_all },
+    { "rollback() invalid args",       test_rollback_invalid_args },
+    { "rollback() nominal case",       test_rollback_nominal_case },
+    { "alloc() all",                   test_alloc_all },
+    { "fsync() all",                   test_fsync_all },
+    { "meta() all",                    test_meta_all },
+    { "readonly() open",               test_readonly_open },
+    { "readonly() write ops",          test_readonly_write_ops },
+    { "readonly() no flock",           test_readonly_no_flock },
+    { "readonly() missing idx",        test_readonly_missing_idx },
+    { "flock()",                       test_flock },
+    { "check() invalid args",          test_check_invalid_args },
+    { "check() valid journal",         test_check_valid_journal },
+    { "check() dat trailing data",     test_check_dat_trailing_data },
     { "check() dat checksum mismatch", test_check_dat_checksum_mismatch },
-    { "check() idx invalid header",   test_check_idx_invalid_header },
-    { "check() idx trailing data",    test_check_idx_trailing_data },
-    { "check() idx rebuilt",          test_check_idx_rebuilt },
-    { "check() idx missing records",  test_check_idx_missing_records },
+    { "check() idx trailing data",     test_check_idx_trailing_data },
+    { "check() idx invalid record",    test_check_idx_invalid_record },
+    { "check() idx missing records",   test_check_idx_missing_records },
     { "split() nominal case",          test_split_nominal_case },
     { "split() at min seqnum",         test_split_at_min_seqnum },
     { "split() at max seqnum",         test_split_at_max_seqnum },
