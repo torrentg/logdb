@@ -1,3 +1,4 @@
+#include "journal.h"
 #include <time.h>
 #include <stdio.h>
 #include <errno.h>
@@ -7,7 +8,6 @@
 #include <signal.h>
 #include <getopt.h>
 #include <pthread.h>
-#include "journal.h"
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
@@ -159,17 +159,17 @@ static int msleep(long msec)
 
 static void print_results_write(const results_write_t *results)
 {
-    double seconds = (double) results->time_ms / 1000.0;
+    double seconds = (double)results->time_ms / 1000.0;
     printf("write - result         = %s\n", ldb_strerror(results->rc));
     printf("write - total time     = %.2lf seconds\n", seconds);
-    printf("write - idle time      = %.2lf seconds\n", (double) results->idle_ms / 1000.0);
+    printf("write - idle time      = %.2lf seconds\n", (double)results->idle_ms / 1000.0);
     printf("write - total records  = %zu\n", results->num_records);
     printf("write - total size     = %s\n", bytes2str(results->num_bytes, 2));
     printf("write - total commits  = %zu\n", results->num_commits);
-    printf("write - records/second = %.2lf\n", (double) results->num_records / seconds);
+    printf("write - records/second = %.2lf\n", (double)results->num_records / seconds);
     printf("write - bytes/second   = %s\n", bytes2str(results->num_bytes / seconds, 2));
-    printf("write - commits/second = %.2lf\n", (double) results->num_commits / seconds);
-    printf("write - idle time (%%)  = %d%%\n", (int)(100.0 * (double) results->idle_ms / (double) results->time_ms));
+    printf("write - commits/second = %.2lf\n", (double)results->num_commits / seconds);
+    printf("write - idle time (%%)  = %d%%\n", (int)(100.0 * (double)results->idle_ms / (double)results->time_ms));
 }
 
 static void print_results_read(const results_read_t *results)
@@ -177,21 +177,21 @@ static void print_results_read(const results_read_t *results)
     double seconds = results->time_ms / 1000.0;
     printf("read  - result         = %s\n", ldb_strerror(results->rc));
     printf("read  - total time     = %.2lf seconds\n", seconds);
-    printf("read  - idle time      = %.2lf seconds\n", (double) results->idle_ms / 1000.0);
+    printf("read  - idle time      = %.2lf seconds\n", (double)results->idle_ms / 1000.0);
     printf("read  - total records  = %zu\n", results->num_records);
     printf("read  - total size     = %s\n", bytes2str(results->num_bytes, 2));
     printf("read  - total queries  = %zu\n", results->num_queries);
-    printf("read  - records/second = %.2lf\n", (double) results->num_records / seconds);
+    printf("read  - records/second = %.2lf\n", (double)results->num_records / seconds);
     printf("read  - bytes/second   = %s\n", bytes2str(results->num_bytes / seconds, 2));
-    printf("read  - queries/second = %.2lf\n", (double) results->num_queries / seconds);
-    printf("read  - idle time (%%)  = %d%%\n", (int)(100.0 * (double) results->idle_ms / (double) results->time_ms));
+    printf("read  - queries/second = %.2lf\n", (double)results->num_queries / seconds);
+    printf("read  - idle time (%%)  = %d%%\n", (int)(100.0 * (double)results->idle_ms / (double)results->time_ms));
 }
 
 static void * run_write(void *args)
 {
-    ldb_journal_t *journal = ((args_write_t *) args)->journal;
-    params_write_t *params = &((args_write_t *) args)->params;
-    results_write_t *results = &((args_write_t *) args)->results;
+    ldb_journal_t *journal = ((args_write_t *)args)->journal;
+    params_write_t *params = &((args_write_t *)args)->params;
+    results_write_t *results = &((args_write_t *)args)->results;
 
     char *data = calloc(params->bytes_per_record, 1);
     size_t num_entries = MIN(params->records_per_commit, params->records_per_second);
@@ -239,8 +239,8 @@ static void * run_write(void *args)
             if (results->time_ms >= 1000 * params->max_seconds)
                 break;
 
-            double seconds = (double) results->time_ms / 1000.0;
-            if ((double) results->num_records < seconds * params->records_per_second)
+            double seconds = (double)results->time_ms / 1000.0;
+            if ((double)results->num_records < seconds * params->records_per_second)
                 break;
 
             results->idle_ms++;
@@ -284,7 +284,7 @@ static int read_entries(ldb_journal_t *journal, uint64_t from_seq, uint64_t to_s
                 break;
 
             // case: buffer too short
-            if (!buffer_realloc(buffer, (size_t) entries[num].data_len + 32))
+            if (!buffer_realloc(buffer, (size_t)entries[num].data_len + 32))
                 return LDB_ERR_MEM;
         }
 
@@ -299,9 +299,9 @@ static int read_entries(ldb_journal_t *journal, uint64_t from_seq, uint64_t to_s
 
 static void * run_read(void *args)
 {
-    ldb_journal_t *journal = ((args_read_t *) args)->journal;
-    params_read_t *params = &((args_read_t *) args)->params;
-    results_read_t *results = &((args_read_t *) args)->results;
+    ldb_journal_t *journal = ((args_read_t *)args)->journal;
+    params_read_t *params = &((args_read_t *)args)->params;
+    results_read_t *results = &((args_read_t *)args)->results;
 
     size_t num_entries = params->records_per_query;
     ldb_entry_t *entries = calloc(num_entries, sizeof(ldb_entry_t));
@@ -347,8 +347,8 @@ static void * run_read(void *args)
             if (results->time_ms >= 1000 * params->max_seconds)
                 break;
 
-            double seconds = (double) results->time_ms / 1000.0;
-            if ((double) results->num_records <= seconds * params->records_per_second)
+            double seconds = (double)results->time_ms / 1000.0;
+            if ((double)results->num_records <= seconds * params->records_per_second)
                 break;
 
             msleep(1);

@@ -1,6 +1,6 @@
-#include "acutest.h"
 #include "journal.h"
 #include "journal.c"
+#include "acutest.h"
 
 // ===========================================
 // Helpers
@@ -15,11 +15,11 @@ void append_entries(ldb_journal_t *journal, uint64_t seqnum1, uint64_t seqnum2)
 
     while (seqnum1 <= seqnum2)
     {
-        snprintf(data, sizeof(data), "data-%d", (int) seqnum1);
+        snprintf(data, sizeof(data), "data-%d", (int)seqnum1);
 
         ldb_entry_t entry = {
             .seqnum = seqnum1,
-            .data_len = (uint32_t) strlen(data) + 1,
+            .data_len = (uint32_t)strlen(data) + 1,
             .data = data
         };
 
@@ -149,7 +149,7 @@ void test_is_valid_name(void)
 
     char name[] = "x";
     for (int i = 1; i < 256; i++) {
-        name[0] = (char) i;
+        name[0] = (char)i;
         TEST_CHECK(ldb_is_valid_name(name) == (isalnum(name[0]) || strchr("_-", name[0]) != NULL));
     }
 }
@@ -183,10 +183,10 @@ void test_close(void)
     TEST_CHECK(ldb_close(NULL) == LDB_OK);
     TEST_CHECK(ldb_close(&journal) == LDB_OK);
 
-    journal.name = (char *) malloc(10);
-    journal.path = (char *) malloc(10);
-    journal.dat_path = (char *) malloc(10);
-    journal.idx_path = (char *) malloc(10);
+    journal.name = (char *)malloc(10);
+    journal.path = (char *)malloc(10);
+    journal.dat_path = (char *)malloc(10);
+    journal.idx_path = (char *)malloc(10);
     journal.dat_fp = NULL;
     journal.idx_fp = NULL;
 
@@ -351,7 +351,7 @@ void test_open_and_repair_2(void)
     ldb_entry_t entry = {
         .seqnum = 10,
         .data_len = 21640,
-        .data = (char *) data
+        .data = (char *)data
     };
     TEST_ASSERT(ldb_append(&journal, &entry, 1, NULL) == LDB_OK);
 
@@ -389,7 +389,7 @@ void test_open_and_repair_3(void)
     ldb_entry_t entry = {
         .seqnum = 10,
         .data_len = 400,
-        .data = (char *) data
+        .data = (char *)data
     };
     TEST_ASSERT(ldb_append(&journal, &entry, 1, NULL) == LDB_OK);
 
@@ -424,8 +424,8 @@ void test_open_1_entry_ok(void)
     const char data[] = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
     ldb_entry_t entry = {
         .seqnum = 10,
-        .data_len = (uint32_t) strlen(data),
-        .data = (char *) data
+        .data_len = (uint32_t)strlen(data),
+        .data = (char *)data
     };
     TEST_ASSERT(ldb_append(&journal, &entry, 1, NULL) == LDB_OK);
     ldb_close(&journal);
@@ -558,8 +558,8 @@ void test_open_idx_missing_last_entry(void)
     TEST_ASSERT(fp != NULL);
     fseek(fp, 0, SEEK_END);
     long idx_size = ftell(fp);
-    TEST_ASSERT(idx_size > (long) sizeof(ldb_record_idx_t));
-    ftruncate(fileno(fp), idx_size - (long) sizeof(ldb_record_idx_t));
+    TEST_ASSERT(idx_size > (long)sizeof(ldb_record_idx_t));
+    ftruncate(fileno(fp), idx_size - (long)sizeof(ldb_record_idx_t));
     fclose(fp);
 
     // open journal (should detect unindexed entry and rebuild idx)
@@ -628,7 +628,7 @@ void test_append_auto(void)
     // create entries
     for (size_t i = 0; i < len; i++) {
         entries[i].seqnum = 0;
-        snprintf(buf, sizeof(buf), "data-%d", (int) i);
+        snprintf(buf, sizeof(buf), "data-%d", (int)i);
         entries[i].data = strdup(buf);
         entries[i].data_len = strlen(buf) + 1;
     }
@@ -679,7 +679,7 @@ void test_append_nominal_case(void)
     // create entries
     for (size_t i = 0; i < len; i++) {
         entries[i].seqnum = 10 + i;
-        snprintf(buf, sizeof(buf), "data-%d", (int) i);
+        snprintf(buf, sizeof(buf), "data-%d", (int)i);
         entries[i].data = strdup(buf);
         entries[i].data_len = strlen(buf) + 1;
     }
@@ -713,7 +713,7 @@ void test_append_broken_sequence(void)
     // create entries
     for (size_t i = 0; i < len; i++) {
         entries[i].seqnum = 10 + i + (i == 5 ? 40 : 0);
-        snprintf(buf, sizeof(buf), "data-%d", (int) i);
+        snprintf(buf, sizeof(buf), "data-%d", (int)i);
         entries[i].data = strdup(buf);
         entries[i].data_len = strlen(buf) + 1;
     }
@@ -1052,7 +1052,7 @@ void test_readonly_write_ops(void)
 
     ldb_entry_t new_entry = { .seqnum = 4, .data_len = 0, .data = NULL };
     TEST_CHECK(ldb_append(&journal, &new_entry, 1, NULL) == LDB_ERR_READONLY);
-    TEST_CHECK(ldb_rollback(&journal, 2) == (long) LDB_ERR_READONLY);
+    TEST_CHECK(ldb_rollback(&journal, 2) == (long)LDB_ERR_READONLY);
     TEST_CHECK(ldb_set_meta(&journal, buf, 5) == LDB_ERR_READONLY);
 
     // verify state was not modified
@@ -1267,7 +1267,7 @@ void test_check_dat_checksum_mismatch(void)
 
     FILE *fp = fopen("test.dat", "r+b");
     TEST_ASSERT(fp != NULL);
-    fseek(fp, (long) checksum_offset_12, SEEK_SET);
+    fseek(fp, (long)checksum_offset_12, SEEK_SET);
     uint32_t bad_checksum = 0xDEADBEEFUL;
     fwrite(&bad_checksum, sizeof(bad_checksum), 1, fp);
     fclose(fp);
@@ -1343,10 +1343,10 @@ void test_check_idx_invalid_record(void)
 
     FILE *fp = fopen("test.idx", "r+b");
     TEST_ASSERT(fp != NULL);
-    fseek(fp, (long) pos_idx_12, SEEK_SET);
+    fseek(fp, (long)pos_idx_12, SEEK_SET);
     fread(&record_idx, sizeof(ldb_record_idx_t), 1, fp);
     record_idx.pos = 0xDEADBEEFULL;  // wrong pos
-    fseek(fp, (long) pos_idx_12, SEEK_SET);
+    fseek(fp, (long)pos_idx_12, SEEK_SET);
     fwrite(&record_idx, sizeof(ldb_record_idx_t), 1, fp);
     fclose(fp);
 
@@ -1386,7 +1386,7 @@ void test_check_idx_missing_records(void)
     TEST_ASSERT(fp != NULL);
     fseek(fp, 0, SEEK_END);
     long size = ftell(fp);
-    ftruncate(fileno(fp), size - 2 * (long) sizeof(ldb_record_idx_t));
+    ftruncate(fileno(fp), size - 2 * (long)sizeof(ldb_record_idx_t));
     fclose(fp);
 
     // repair -> idx rebuilt with all 5 records

@@ -1,8 +1,8 @@
+#include "journal.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
-#include "journal.h"
 
 #define MAX_ENTRIES 10
 #define MIN(a,b) (((a) < (b)) ? (a) : (b))
@@ -20,7 +20,7 @@ static const char lorem[] =
 ldb_entry_t create_random_entry(size_t seqnum) {
     return (ldb_entry_t) {
         .seqnum = seqnum,
-        .data = (char *) lorem + (rand() % (sizeof(lorem) - 21)),
+        .data = (char *)lorem + (rand() % (sizeof(lorem) - 21)),
         .data_len = 20
     };
 }
@@ -30,7 +30,7 @@ void print_entry(const char *prefix, const ldb_entry_t *entry) {
             prefix,
             entry->seqnum,
             entry->data_len, 
-            (char *) entry->data);
+            (char *)entry->data);
 }
 
 void print_result(const char *fmt, int rc, ...)
@@ -156,12 +156,12 @@ int run(ldb_journal_t *journal)
 
                 // case: buffer too short
                 char *ptr = NULL;
-                size_t need = (size_t) entries[num].data_len + 32;
+                size_t need = (size_t)entries[num].data_len + 32;
 
                 while (buf_len < need)
                     buf_len *= 2;
 
-                if ((ptr = (char *) realloc(buf, buf_len)) == NULL) {
+                if ((ptr = (char *)realloc(buf, buf_len)) == NULL) {
                     printf("\nError resizing buffer: out of memory\n");
                     break;
                 }

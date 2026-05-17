@@ -1,5 +1,5 @@
+#include "journal.h"
 #define _POSIX_C_SOURCE 200809L
-
 #include <stdio.h>
 #include <errno.h>
 #include <ctype.h>
@@ -13,7 +13,6 @@
 #include <inttypes.h>
 #include <sys/stat.h>
 #include <libgen.h>
-#include "journal.h"
 
 #define APP_NAME                "jtools"
 #define EXT_DAT                 ".dat"
@@ -192,12 +191,12 @@ static int cmd_summary(const params_t *params)
     if ((rc = ldb_open(journal, params->file1.path, params->file1.name, LDB_OPEN_READONLY)) != LDB_OK)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
-    stat(((journal_header_t *) journal)->dat_path, &stat_dat);
-    stat(((journal_header_t *) journal)->idx_path, &stat_idx);
+    stat(((journal_header_t *)journal)->dat_path, &stat_dat);
+    stat(((journal_header_t *)journal)->idx_path, &stat_idx);
 
-    printf("Data:     %s (%lld bytes)\n", ((journal_header_t *) journal)->dat_path, (long long)stat_dat.st_size);
-    printf("Index:    %s (%lld bytes)\n", ((journal_header_t *) journal)->idx_path, (long long)stat_idx.st_size);
-    printf("Format:   %u\n", ((journal_header_t *) journal)->format);
+    printf("Data:     %s (%lld bytes)\n", ((journal_header_t *)journal)->dat_path, (long long)stat_dat.st_size);
+    printf("Index:    %s (%lld bytes)\n", ((journal_header_t *)journal)->idx_path, (long long)stat_idx.st_size);
+    printf("Format:   %u\n", ((journal_header_t *)journal)->format);
 
     ldb_get_meta(journal, meta, sizeof(meta));
 
@@ -247,7 +246,7 @@ static int cmd_rollback(const params_t *params)
 
     seq = (params->have_num ? (range.max_seqnum >= params->num ? range.max_seqnum - params->num : 0) : params->seq);
 
-    if ((rc = (int) ldb_rollback(journal, seq)) < 0)
+    if ((rc = (int)ldb_rollback(journal, seq)) < 0)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
     printf("Removed entries: %d\n", rc);
@@ -428,7 +427,7 @@ static void parse_args(int argc, char **argv, params_t *params)
                     fprintf(stderr, "%s: multiple modes specified\n", APP_NAME);
                     exit(EXIT_FAILURE);
                 }
-                params->mode = (mode_e) opt;
+                params->mode = (mode_e)opt;
                 break;
             default:
                 exit(EXIT_FAILURE);
