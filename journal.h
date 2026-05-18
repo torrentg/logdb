@@ -106,11 +106,11 @@ SOFTWARE.
  * -------------------------------------------------------------------
  *               ┌ open()         -       -     Initialize mutexes, create FILEs used to write and fds used to read
  *               ├ append()       -       W     dat and idx files flushed at the end. State updated after flush.
- * thread-write: ┼ rollback()     W       W     
- *               ├ check()        W       W     
+ * thread-write: ┼ rollback()     W       W
+ *               ├ check()        W       W
  *               └ close()        -       -     Destroy mutexes, close files
- *               ┌ range()        R       R     
- * thread-read:  ┼ read()         R       R     
+ *               ┌ range()        R       R
+ * thread-read:  ┼ read()         R       R
  */
 
 #define LDB_VERSION_MAJOR          1
@@ -538,13 +538,11 @@ class journal_t
     ldb_journal_t *m_journal = nullptr;
 };
 
-int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum, const std::string &name_a, const std::string &name_b)
-{
+inline int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum, const std::string &name_a, const std::string &name_b) {
     return ldb_split(path.c_str(), name.c_str(), seqnum, name_a.c_str(), name_b.c_str());
 }
 
-int join(const std::filesystem::path &path, const std::string &name1, const std::string &name2, const std::string &name)
-{
+inline int join(const std::filesystem::path &path, const std::string &name1, const std::string &name2, const std::string &name) {
     return ldb_join(path.c_str(), name1.c_str(), name2.c_str(), name.c_str());
 }
 

@@ -1861,8 +1861,6 @@ int ldb_read(ldb_journal_t *obj, uint64_t seqnum, ldb_entry_t *entries, size_t l
     if (num != NULL)
         *num = idx;
 
-    // TODO: validate checksum?
-
     ret = LDB_OK;
 
 END_FUNCTION:
