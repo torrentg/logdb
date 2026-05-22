@@ -554,15 +554,8 @@ static bool ldb_copy_file(FILE *fp1, size_t pos0, size_t pos1, FILE *fp2, size_t
     assert(!ferror(fp2));
     assert(pos0 <= pos1);
 
-    bool ret = false;
-    char buf[BUFSIZ] = {0};
-    long orig1 = ftell(fp1);
-    long orig2 = ftell(fp2);
     size_t len1 = ldb_get_file_size(fp1);
     size_t len2 = ldb_get_file_size(fp2);
-
-    if (orig1 < 0 || orig2 < 0)
-        return false;
 
     if (pos0 > pos1 || pos1 > len1 || pos2 > len2)
         return false;
@@ -570,32 +563,31 @@ static bool ldb_copy_file(FILE *fp1, size_t pos0, size_t pos1, FILE *fp2, size_t
     if (pos0 == pos1)
         return true;
 
-    if (fseek(fp1, (long)pos0, SEEK_SET) != 0)
-        goto LDB_COPY_FILE_END;
+    int fd1 = fileno(fp1);
+    int fd2 = fileno(fp2);
 
-    if (fseek(fp2, (long)pos2, SEEK_SET) != 0)
-        goto LDB_COPY_FILE_END;
+    if (fd1 == -1 || fd2 == -1)
+        return false;
 
-    for (size_t pos = pos0; pos < pos1; pos += sizeof(buf))
+    // Flush fp2 stdio buffer before writing via raw fd
+    if (fflush(fp2) != 0)
+        return false;
+
+    off_t off_in  = (off_t)pos0;
+    off_t off_out = (off_t)pos2;
+    size_t remaining = pos1 - pos0;
+
+    while (remaining > 0)
     {
-        size_t num_bytes = ldb_min(pos1 - pos, sizeof(buf));
+        ssize_t rc = copy_file_range(fd1, &off_in, fd2, &off_out, remaining, 0);
 
-        if (fread(buf, 1, num_bytes, fp1) != num_bytes)
-            goto LDB_COPY_FILE_END;
+        if (rc <= 0)
+            return false;
 
-        if (fwrite(buf, num_bytes, 1, fp2) != 1)
-            goto LDB_COPY_FILE_END;
+        remaining -= (size_t)rc;
     }
 
-    assert(!feof(fp1) && !ferror(fp1));
-    assert(!feof(fp2) && !ferror(fp2));
-
-    ret = true;
-
-LDB_COPY_FILE_END:
-    fseek(fp1, orig1, SEEK_SET);
-    fseek(fp2, orig2, SEEK_SET);
-    return ret;
+    return true;
 }
 
 // returns the position in the idx file for a given seqnum
@@ -1406,93 +1398,134 @@ int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *n
 {
     int ret = LDB_OK;
     ldb_impl_t obj = {0};
-    ldb_impl_t obj_a = {0};
-    ldb_impl_t obj_b = {0};
     ldb_header_dat_t header_dat = {0};
+    ldb_header_idx_t header_idx = {0};
     ldb_record_idx_t record_idx = {0};
-    char *filename_a = NULL;
-    char *filename_b = NULL;
-    char *idx_filename_a = NULL;
-    char *idx_filename_b = NULL;
-    FILE *fp_a = NULL;
-    FILE *fp_b = NULL;
+    ldb_record_idx_t *records_b = NULL;
+    char *filename_dat_a = NULL;
+    char *filename_dat_b = NULL;
+    char *filename_idx_a = NULL;
+    char *filename_idx_b = NULL;
+    FILE *fp_dat_a = NULL;
+    FILE *fp_dat_b = NULL;
+    FILE *fp_idx_a = NULL;
+    FILE *fp_idx_b = NULL;
     int dat_fd = -1;
     int idx_fd = -1;
-    ssize_t rc = 0;
+    size_t end_idx_a = 0;
+    size_t count_b = 0;
+    size_t size_idx_b = 0;
+    size_t dat_offset = 0;
 
+    // Validate input parameters
     if (!ldb_is_valid_name(name) || !ldb_is_valid_name(name_a) || !ldb_is_valid_name(name_b))
         exit_function(LDB_ERR_ARG);
 
     if (strcmp(name, name_a) == 0 || strcmp(name, name_b) == 0 || strcmp(name_a, name_b) == 0)
         exit_function(LDB_ERR_ARG); 
 
-    if ((filename_a = ldb_create_filename(path, name_a, LDB_EXT_DAT)) == NULL)
+    if ((filename_dat_a = ldb_create_filename(path, name_a, LDB_EXT_DAT)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((filename_b = ldb_create_filename(path, name_b, LDB_EXT_DAT)) == NULL)
+    if ((filename_dat_b = ldb_create_filename(path, name_b, LDB_EXT_DAT)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((idx_filename_a = ldb_create_filename(path, name_a, LDB_EXT_IDX)) == NULL)
+    if ((filename_idx_a = ldb_create_filename(path, name_a, LDB_EXT_IDX)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((idx_filename_b = ldb_create_filename(path, name_b, LDB_EXT_IDX)) == NULL)
+    if ((filename_idx_b = ldb_create_filename(path, name_b, LDB_EXT_IDX)) == NULL)
         exit_function(LDB_ERR_MEM);
 
+    // Open original journal
     if ((ret = ldb_open(&obj, path, name, 0)) != LDB_OK)
         exit_function(ret);
 
     dat_fd = fileno(obj.dat_fp);
     idx_fd = fileno(obj.idx_fp);
 
-    if ((ret = ldb_read_record_idx(idx_fd, &obj.state, seqnum, &record_idx)) != LDB_OK)
-        exit_function(ret);
+    if (seqnum >= obj.state.max_seqnum)
+        exit_function(LDB_ERR_ARG);
 
-    rc = pread(dat_fd, &header_dat, sizeof(ldb_header_dat_t), 0);
-
-    if (rc != (ssize_t)sizeof(ldb_header_dat_t))
+    // Read file headers
+    if (pread(dat_fd, &header_dat, sizeof(header_dat), 0) != (ssize_t)sizeof(header_dat))
         exit_function(LDB_ERR_READ_DAT);
 
-    // Create journal A (seqnum1 .. seqnum-1)
-    if ((fp_a = fopen(filename_a, "wx")) == NULL)
+    if (pread(idx_fd, &header_idx, sizeof(header_idx), 0) != (ssize_t)sizeof(header_idx))
+        exit_function(LDB_ERR_READ_IDX);
+
+    // Create journal A (seqnum1 .. seqnum)
+    if ((fp_dat_a = fopen(filename_dat_a, "wx")) == NULL)
         exit_function(LDB_ERR_CREATE_DAT);
 
-    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_a) != 1)
+    if ((ret = ldb_read_record_idx(idx_fd, &obj.state, seqnum + 1, &record_idx)) != LDB_OK)
+        exit_function(ret);
+
+    if (!ldb_copy_file(obj.dat_fp, 0, record_idx.pos, fp_dat_a, 0))
         exit_function(LDB_ERR_WRITE_DAT);
 
-    if (!ldb_copy_file(obj.dat_fp, sizeof(ldb_header_dat_t), record_idx.pos, fp_a, sizeof(ldb_header_dat_t)))
+    if (fclose(fp_dat_a) != 0)
         exit_function(LDB_ERR_WRITE_DAT);
 
-    if (fclose(fp_a) != 0)
-        exit_function(LDB_ERR_WRITE_DAT);
+    fp_dat_a = NULL;
 
-    fp_a = NULL;
-
-    // Create journal B (seqnum .. seqnum2)
-    if ((fp_b = fopen(filename_b, "wx")) == NULL)
+    // Create journal B (seqnum+1 .. seqnum2)
+    if ((fp_dat_b = fopen(filename_dat_b, "wx")) == NULL)
         exit_function(LDB_ERR_CREATE_DAT);
 
-    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_b) != 1)
+    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_dat_b) != 1)
         exit_function(LDB_ERR_WRITE_DAT);
 
-    if (!ldb_copy_file(obj.dat_fp, record_idx.pos, obj.dat_end, fp_b, sizeof(ldb_header_dat_t)))
+    if (!ldb_copy_file(obj.dat_fp, record_idx.pos, obj.dat_end, fp_dat_b, sizeof(ldb_header_dat_t)))
         exit_function(LDB_ERR_WRITE_DAT);
 
-    if (fclose(fp_b) != 0)
+    if (fclose(fp_dat_b) != 0)
         exit_function(LDB_ERR_WRITE_DAT);
 
-    fp_b = NULL;
+    fp_dat_b = NULL;
 
     // Generate index for journal A
-    if ((ret = ldb_open(&obj_a, path, name_a, 0)) != LDB_OK)
-        exit_function(ret);
+    if ((fp_idx_a = fopen(filename_idx_a, "wx")) == NULL)
+        exit_function(LDB_ERR_CREATE_IDX);
 
-    ldb_close(&obj_a);
+    end_idx_a = sizeof(ldb_header_idx_t) + (size_t)(seqnum - obj.state.min_seqnum + 1) * sizeof(ldb_record_idx_t);
+
+    if (!ldb_copy_file(obj.idx_fp, 0, end_idx_a, fp_idx_a, 0))
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    if (fclose(fp_idx_a) != 0)
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    fp_idx_a = NULL;
 
     // Generate index for journal B
-    if ((ret = ldb_open(&obj_b, path, name_b, 0)) != LDB_OK)
-        exit_function(ret);
+    count_b = (size_t)(obj.state.max_seqnum - seqnum);
+    size_idx_b = count_b * sizeof(ldb_record_idx_t);
+    dat_offset = record_idx.pos - sizeof(ldb_header_dat_t);
 
-    ldb_close(&obj_b);
+    if ((records_b = malloc(size_idx_b)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if (pread(idx_fd, records_b, size_idx_b, (off_t)end_idx_a) != (ssize_t)size_idx_b)
+        exit_function(LDB_ERR_READ_IDX);
+
+    for (size_t i = 0; i < count_b; i++)
+        records_b[i].pos -= dat_offset;
+
+    header_idx.first_seqnum = seqnum + 1;
+
+    if ((fp_idx_b = fopen(filename_idx_b, "wx")) == NULL)
+        exit_function(LDB_ERR_CREATE_IDX);
+
+    if (fwrite(&header_idx, sizeof(header_idx), 1, fp_idx_b) != 1)
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    if (fwrite(records_b, sizeof(ldb_record_idx_t), count_b, fp_idx_b) != count_b)
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    if (fclose(fp_idx_b) != 0)
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    fp_idx_b = NULL;
 
     // Remove original journal (dat and idx)
     remove(obj.dat_path);
@@ -1502,20 +1535,21 @@ int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *n
 
 END_FUNCTION:
     ldb_close(&obj);
-    ldb_close(&obj_a);
-    ldb_close(&obj_b);
-    if (fp_a != NULL) fclose(fp_a);
-    if (fp_b != NULL) fclose(fp_b);
+    if (fp_dat_a != NULL) fclose(fp_dat_a);
+    if (fp_dat_b != NULL) fclose(fp_dat_b);
+    if (fp_idx_a != NULL) fclose(fp_idx_a);
+    if (fp_idx_b != NULL) fclose(fp_idx_b);
     if (ret != LDB_OK) {
-        if (filename_a) remove(filename_a);
-        if (filename_b) remove(filename_b);
-        if (idx_filename_a) remove(idx_filename_a);
-        if (idx_filename_b) remove(idx_filename_b);
+        if (filename_dat_a) remove(filename_dat_a);
+        if (filename_dat_b) remove(filename_dat_b);
+        if (filename_idx_a) remove(filename_idx_a);
+        if (filename_idx_b) remove(filename_idx_b);
     }
-    free(filename_a);
-    free(filename_b);
-    free(idx_filename_a);
-    free(idx_filename_b);
+    free(filename_dat_a);
+    free(filename_dat_b);
+    free(filename_idx_a);
+    free(filename_idx_b);
+    free(records_b);
     return ret;
 }
 
@@ -1524,11 +1558,12 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
     int ret = LDB_OK;
     ldb_impl_t obj1 = {0};
     ldb_impl_t obj2 = {0};
-    ldb_impl_t obj_out = {0};
     ldb_header_dat_t header_dat = {0};
-    char *filename_out = NULL;
-    char *idx_filename_out = NULL;
-    FILE *fp_out = NULL;
+    ldb_record_idx_t *records_idx = NULL;
+    char *filename_dat_out = NULL;
+    char *filename_idx_out = NULL;
+    FILE *fp_dat_out = NULL;
+    FILE *fp_idx_out = NULL;
     int dat_fd1 = -1;
     ssize_t rc = 0;
 
@@ -1541,10 +1576,10 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
     if (strcmp(name1, name2) == 0 || strcmp(name1, name) == 0 || strcmp(name2, name) == 0)
         exit_function(LDB_ERR_ARG);
 
-    if ((filename_out = ldb_create_filename(path, name, LDB_EXT_DAT)) == NULL)
+    if ((filename_dat_out = ldb_create_filename(path, name, LDB_EXT_DAT)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((idx_filename_out = ldb_create_filename(path, name, LDB_EXT_IDX)) == NULL)
+    if ((filename_idx_out = ldb_create_filename(path, name, LDB_EXT_IDX)) == NULL)
         exit_function(LDB_ERR_MEM);
 
     if ((ret = ldb_open(&obj1, path, name1, 0)) != LDB_OK)
@@ -1555,9 +1590,7 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
 
     dat_fd1 = fileno(obj1.dat_fp);
 
-    rc = pread(dat_fd1, &header_dat, sizeof(ldb_header_dat_t), 0);
-
-    if (rc != (ssize_t)sizeof(ldb_header_dat_t))
+    if (pread(dat_fd1, &header_dat, sizeof(header_dat), 0) != (ssize_t)sizeof(header_dat))
         exit_function(LDB_ERR_READ_DAT);
 
     // check consecutiveness only when both journals have entries
@@ -1566,33 +1599,91 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
             exit_function(LDB_ERR_SEQNUM);
     }
 
-    if ((fp_out = fopen(filename_out, "wx")) == NULL)
+    if ((fp_dat_out = fopen(filename_dat_out, "wx")) == NULL)
         exit_function(LDB_ERR_CREATE_DAT);
 
-    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_out) != 1)
+    if (fwrite(&header_dat, sizeof(ldb_header_dat_t), 1, fp_dat_out) != 1)
         exit_function(LDB_ERR_WRITE_DAT);
 
     if (obj1.state.min_seqnum != 0) {
-        if (!ldb_copy_file(obj1.dat_fp, sizeof(ldb_header_dat_t), obj1.dat_end, fp_out, sizeof(ldb_header_dat_t)))
+        if (!ldb_copy_file(obj1.dat_fp, sizeof(ldb_header_dat_t), obj1.dat_end, fp_dat_out, sizeof(ldb_header_dat_t)))
             exit_function(LDB_ERR_WRITE_DAT);
     }
 
     if (obj2.state.min_seqnum != 0) {
         size_t pos_out = (obj1.state.min_seqnum != 0) ? obj1.dat_end : sizeof(ldb_header_dat_t);
-        if (!ldb_copy_file(obj2.dat_fp, sizeof(ldb_header_dat_t), obj2.dat_end, fp_out, pos_out))
+        if (!ldb_copy_file(obj2.dat_fp, sizeof(ldb_header_dat_t), obj2.dat_end, fp_dat_out, pos_out))
             exit_function(LDB_ERR_WRITE_DAT);
     }
 
-    if (fclose(fp_out) != 0)
+    if (fclose(fp_dat_out) != 0)
         exit_function(LDB_ERR_WRITE_DAT);
 
-    fp_out = NULL;
+    fp_dat_out = NULL;
 
     // Generate index for output journal
-    if ((ret = ldb_open(&obj_out, path, name, 0)) != LDB_OK)
-        exit_function(ret);
+    fp_idx_out = fopen(filename_idx_out, "wx");
+    if (fp_idx_out == NULL)
+        exit_function(LDB_ERR_CREATE_IDX);
 
-    ldb_close(&obj_out);
+    if (obj1.state.min_seqnum == 0 && obj2.state.min_seqnum == 0)
+    {
+        // Both empty: copy header with first_seqnum = 0
+        ldb_header_idx_t hdr_idx = {0};
+        if (pread(fileno(obj1.idx_fp), &hdr_idx, sizeof(hdr_idx), 0) != (ssize_t)sizeof(hdr_idx))
+            exit_function(LDB_ERR_READ_IDX);
+        hdr_idx.first_seqnum = 0;
+        if (fwrite(&hdr_idx, sizeof(hdr_idx), 1, fp_idx_out) != 1)
+            exit_function(LDB_ERR_WRITE_IDX);
+    }
+    else if (obj1.state.min_seqnum == 0)
+    {
+        // Only journal2 has data: copy idx2 entirely (positions unchanged)
+        size_t idx2_end = sizeof(ldb_header_idx_t) +
+            (size_t)(obj2.state.max_seqnum - obj2.state.min_seqnum + 1) * sizeof(ldb_record_idx_t);
+        if (!ldb_copy_file(obj2.idx_fp, 0, idx2_end, fp_idx_out, 0))
+            exit_function(LDB_ERR_WRITE_IDX);
+    }
+    else if (obj2.state.min_seqnum == 0)
+    {
+        // Only journal1 has data: copy idx1 entirely
+        size_t idx1_end = sizeof(ldb_header_idx_t) +
+            (size_t)(obj1.state.max_seqnum - obj1.state.min_seqnum + 1) * sizeof(ldb_record_idx_t);
+        if (!ldb_copy_file(obj1.idx_fp, 0, idx1_end, fp_idx_out, 0))
+            exit_function(LDB_ERR_WRITE_IDX);
+    }
+    else
+    {
+        // Both have data: copy idx1, then read idx2 into memory, adjust offsets, append
+        size_t count1      = (size_t)(obj1.state.max_seqnum - obj1.state.min_seqnum + 1);
+        size_t count2      = (size_t)(obj2.state.max_seqnum - obj2.state.min_seqnum + 1);
+        size_t idx1_end    = sizeof(ldb_header_idx_t) + count1 * sizeof(ldb_record_idx_t);
+        size_t idx2_size   = count2 * sizeof(ldb_record_idx_t);
+        size_t dat_offset2 = obj1.dat_end - sizeof(ldb_header_dat_t);
+
+        if (!ldb_copy_file(obj1.idx_fp, 0, idx1_end, fp_idx_out, 0))
+            exit_function(LDB_ERR_WRITE_IDX);
+
+        if ((records_idx = malloc(idx2_size)) == NULL)
+            exit_function(LDB_ERR_MEM);
+
+        if (pread(fileno(obj2.idx_fp), records_idx, idx2_size, (off_t)sizeof(ldb_header_idx_t)) != (ssize_t)idx2_size)
+            exit_function(LDB_ERR_READ_IDX);
+
+        for (size_t i = 0; i < count2; i++)
+            records_idx[i].pos += dat_offset2;
+
+        if (fseek(fp_idx_out, 0, SEEK_END) != 0)
+            exit_function(LDB_ERR_WRITE_IDX);
+
+        if (fwrite(records_idx, sizeof(ldb_record_idx_t), count2, fp_idx_out) != count2)
+            exit_function(LDB_ERR_WRITE_IDX);
+    }
+
+    if (fclose(fp_idx_out) != 0)
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    fp_idx_out = NULL;
 
     // Remove source journals
     remove(obj1.dat_path);
@@ -1605,14 +1696,15 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
 END_FUNCTION:
     ldb_close(&obj1);
     ldb_close(&obj2);
-    ldb_close(&obj_out);
-    if (fp_out != NULL) fclose(fp_out);
+    if (fp_dat_out != NULL) fclose(fp_dat_out);
+    if (fp_idx_out != NULL) fclose(fp_idx_out);
     if (ret != LDB_OK) {
-        if (filename_out) remove(filename_out);
-        if (idx_filename_out) remove(idx_filename_out);
+        if (filename_dat_out) remove(filename_dat_out);
+        if (filename_idx_out) remove(filename_idx_out);
     }
-    free(filename_out);
-    free(idx_filename_out);
+    free(filename_dat_out);
+    free(filename_idx_out);
+    free(records_idx);
     return ret;
 }
 

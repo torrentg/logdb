@@ -1422,21 +1422,21 @@ void test_split_nominal_case(void)
     TEST_CHECK(src.state.max_seqnum == 19);
     ldb_close(&src);
 
-    // split at seqnum 15: A=[10..14], B=[15..19]
+    // split at seqnum 15: A=[10..15], B=[16..19]
     TEST_CHECK(ldb_split("", "test", 15, "test-a", "test-b") == LDB_OK);
 
     TEST_ASSERT(ldb_open(&a, "", "test-a", 0) == LDB_OK);
     TEST_CHECK(a.state.min_seqnum == 10);
-    TEST_CHECK(a.state.max_seqnum == 14);
+    TEST_CHECK(a.state.max_seqnum == 15);
     TEST_CHECK(ldb_read(&a, 10, &entry, 1, buf, sizeof(buf), NULL) == LDB_OK);
     TEST_CHECK(check_entry(&entry, 10, "data-10"));
     ldb_close(&a);
 
     TEST_ASSERT(ldb_open(&b, "", "test-b", 0) == LDB_OK);
-    TEST_CHECK(b.state.min_seqnum == 15);
+    TEST_CHECK(b.state.min_seqnum == 16);
     TEST_CHECK(b.state.max_seqnum == 19);
-    TEST_CHECK(ldb_read(&b, 15, &entry, 1, buf, sizeof(buf), NULL) == LDB_OK);
-    TEST_CHECK(check_entry(&entry, 15, "data-15"));
+    TEST_CHECK(ldb_read(&b, 16, &entry, 1, buf, sizeof(buf), NULL) == LDB_OK);
+    TEST_CHECK(check_entry(&entry, 16, "data-16"));
     ldb_close(&b);
 
     remove("test.dat");  remove("test.idx");
@@ -1458,16 +1458,16 @@ void test_split_at_min_seqnum(void)
     append_entries(&src, 10, 19);
     ldb_close(&src);
 
-    // split at min_seqnum=10: A gets empty (header only), B gets all
+    // split at min_seqnum=10: A=[10..10], B=[11..19]
     TEST_CHECK(ldb_split("", "test", 10, "test-a", "test-b") == LDB_OK);
 
     TEST_ASSERT(ldb_open(&a, "", "test-a", 0) == LDB_OK);
-    TEST_CHECK(a.state.min_seqnum == 0);  // empty
-    TEST_CHECK(a.state.max_seqnum == 0);
+    TEST_CHECK(a.state.min_seqnum == 10);
+    TEST_CHECK(a.state.max_seqnum == 10);
     ldb_close(&a);
 
     TEST_ASSERT(ldb_open(&b, "", "test-b", 0) == LDB_OK);
-    TEST_CHECK(b.state.min_seqnum == 10);
+    TEST_CHECK(b.state.min_seqnum == 11);
     TEST_CHECK(b.state.max_seqnum == 19);
     ldb_close(&b);
 
@@ -1479,8 +1479,6 @@ void test_split_at_min_seqnum(void)
 void test_split_at_max_seqnum(void)
 {
     ldb_impl_t src = {0};
-    ldb_impl_t a = {0};
-    ldb_impl_t b = {0};
 
     remove("test.dat");  remove("test.idx");
     remove("test-a.dat"); remove("test-a.idx");
@@ -1490,18 +1488,10 @@ void test_split_at_max_seqnum(void)
     append_entries(&src, 10, 19);
     ldb_close(&src);
 
-    // split at max_seqnum=19: A=[10..18], B=[19..19]
-    TEST_CHECK(ldb_split("", "test", 19, "test-a", "test-b") == LDB_OK);
-
-    TEST_ASSERT(ldb_open(&a, "", "test-a", 0) == LDB_OK);
-    TEST_CHECK(a.state.min_seqnum == 10);
-    TEST_CHECK(a.state.max_seqnum == 18);
-    ldb_close(&a);
-
-    TEST_ASSERT(ldb_open(&b, "", "test-b", 0) == LDB_OK);
-    TEST_CHECK(b.state.min_seqnum == 19);
-    TEST_CHECK(b.state.max_seqnum == 19);
-    ldb_close(&b);
+    // split at max_seqnum=19: not allowed (journal-b would be empty)
+    TEST_CHECK(ldb_split("", "test", 19, "test-a", "test-b") != LDB_OK);
+    TEST_CHECK(access("test-a.dat", F_OK) != 0);  // not created
+    TEST_CHECK(access("test-b.dat", F_OK) != 0);
 
     remove("test.dat");  remove("test.idx");
     remove("test-a.dat"); remove("test-a.idx");

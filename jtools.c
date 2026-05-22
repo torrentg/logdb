@@ -311,14 +311,14 @@ static int cmd_split(const params_t *params)
     journal = NULL;
 
     if (params->have_num)
-        seq = range.min_seqnum + params->num;
+        seq = range.min_seqnum + params->num - 1;
     else
         seq = params->seq;
 
     if (range.min_seqnum == 0)
         exit_function(EXIT_FAILURE, "%s", "journal is empty");
 
-    if (seq <= range.min_seqnum || seq > range.max_seqnum)
+    if (seq < range.min_seqnum || seq >= range.max_seqnum)
         exit_function(EXIT_FAILURE, "%s", "invalid split point");
 
     if ((rc = ldb_split(params->file1.path, params->file1.name, seq, name_a, name_b)) != LDB_OK)

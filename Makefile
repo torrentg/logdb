@@ -1,5 +1,5 @@
 # -Wconversion not set because acutest.h and tests.c warnings pollutes output
-CFLAGS= -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Wnull-dereference -pthread
+CFLAGS= -std=c99 -D_GNU_SOURCE -Wall -Wextra -Wpedantic -Wnull-dereference -pthread
 LDFLAGS= -lpthread
 
 TARGETS = tests example performance jtools

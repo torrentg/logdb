@@ -359,10 +359,10 @@ long ldb_rollback(ldb_journal_t *obj, uint64_t seqnum);
  * 
  *   Index file issue                             Repairable
  *   -------------------------------------------  ----------
- *   Index seqnum mismatch with dat               Yes (rebuilt)
+ *   Index seqnum mismatch                        Yes (rebuilt)
  *   Sequence gap in index records                Yes (rebuilt)
  *   Index entry position out of bounds           Yes (rebuilt)
- *   Missing index records                        Yes (rebuilt)
+ *   Missing records                              Yes (rebuilt)
  *   Trailing data after last valid record        Yes (zeroed)
  *
  * @param[in] obj    Open journal to check.
@@ -380,13 +380,12 @@ int ldb_check(ldb_journal_t *obj, bool repair);
  * Splits a journal into two journals at the given sequence number.
  *
  * The source journal is opened with an exclusive lock and must already exist.
- * Journal A receives entries [seqnum1 .. seqnum-1] and journal B receives
- * entries [seqnum .. seqnum2]. Both output journals inherit the header
- * (including metadata) of the source journal. Index files are not generated;
- * they will be rebuilt automatically on the first ldb_open().
+ * Journal A receives entries [seqnum1 .. seqnum] and journal B receives
+ * entries [seqnum+1 .. seqnum2]. Both output journals inherit the header
+ * (including metadata) of the source journal. 
  *
  * The caller is responsible for ensuring:
- *   - seqnum is strictly inside the range (min_seqnum < seqnum <= max_seqnum)
+ *   - seqnum is strictly inside the range (min_seqnum <= seqnum < max_seqnum)
  *   - name_a and name_b are valid journal names and do not already exist
  *   - name_a and name_b fit within the maximum name length
  *
@@ -398,7 +397,7 @@ int ldb_check(ldb_journal_t *obj, bool repair);
  *
  * @param[in] path    Directory where source and output journals are located.
  * @param[in] name    Source journal name.
- * @param[in] seqnum  First sequence number that goes into journal B.
+ * @param[in] seqnum  Last sequence number that goes into journal A.
  * @param[in] name_a  Output journal name for the first half.
  * @param[in] name_b  Output journal name for the second half.
  *
