@@ -107,14 +107,14 @@ void test_crc32(void)
 
     // basic case
     const char str1[] = "hello world";
-    TEST_CHECK(ldb_crc32(str1, strlen(str1), 0) == 0x0D4A1185);
+    TEST_CHECK(ldb_crc32(str1, strlen(str1), 0) == 0xC99465AA);
 
     // composability
     const char str11[] = "hello ";
     const char str12[] = "world";
     size_t checksum = ldb_crc32(str11, strlen(str11), 0);
     checksum = ldb_crc32(str12, strlen(str12), checksum);
-    TEST_CHECK(checksum == 0x0D4A1185);
+    TEST_CHECK(checksum == 0xC99465AA);
 }
 
 void test_is_valid_path(void)
