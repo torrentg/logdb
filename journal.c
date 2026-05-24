@@ -23,6 +23,7 @@
 
 #define LDB_EXT_DAT             ".dat"
 #define LDB_EXT_IDX             ".idx"
+#define LDB_SUFFIX_TMP          "tmp"
 #define LDB_PATH_SEPARATOR      "/"
 #define LDB_NAME_MAX_LENGTH     32
 
@@ -1333,7 +1334,7 @@ END_FUNCTION:
 
 #undef goto_zeroize
 
-int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *name_a, const char *name_b)
+int ldb_split(const char *path, const char *name, uint64_t seqnum)
 {
     int ret = LDB_OK;
     ldb_impl_t obj = {0};
@@ -1355,24 +1356,30 @@ int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *n
     size_t count_b = 0;
     size_t size_idx_b = 0;
     size_t dat_offset = 0;
+    char buf[128] = {0};
 
-    // Validate input parameters
-    if (!ldb_is_valid_name(name) || !ldb_is_valid_name(name_a) || !ldb_is_valid_name(name_b))
+    // Preparing part 1
+    snprintf(buf, sizeof(buf), "%s-%zu", name, (size_t)seqnum);
+
+    if (!ldb_is_valid_name(buf))
         exit_function(LDB_ERR_ARG);
 
-    if (strcmp(name, name_a) == 0 || strcmp(name, name_b) == 0 || strcmp(name_a, name_b) == 0)
-        exit_function(LDB_ERR_ARG); 
-
-    if ((filename_dat_a = ldb_create_filename(path, name_a, LDB_EXT_DAT)) == NULL)
+    if ((filename_dat_a = ldb_create_filename(path, buf, LDB_EXT_DAT)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((filename_dat_b = ldb_create_filename(path, name_b, LDB_EXT_DAT)) == NULL)
+    if ((filename_idx_a = ldb_create_filename(path, buf, LDB_EXT_IDX)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((filename_idx_a = ldb_create_filename(path, name_a, LDB_EXT_IDX)) == NULL)
+    // Preparing part 2
+    snprintf(buf, sizeof(buf), "%s-%s", name, LDB_SUFFIX_TMP);
+
+    if (!ldb_is_valid_name(buf))
+        exit_function(LDB_ERR_ARG);
+
+    if ((filename_dat_b = ldb_create_filename(path, buf, LDB_EXT_DAT)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((filename_idx_b = ldb_create_filename(path, name_b, LDB_EXT_IDX)) == NULL)
+    if ((filename_idx_b = ldb_create_filename(path, buf, LDB_EXT_IDX)) == NULL)
         exit_function(LDB_ERR_MEM);
 
     // Open original journal
@@ -1466,9 +1473,14 @@ int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *n
 
     fp_idx_b = NULL;
 
-    // Remove original journal (dat and idx)
-    remove(obj.dat_path);
-    remove(obj.idx_path);
+    // Rename ending part to original name
+    if (rename(filename_dat_b, obj.dat_path) != 0)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (rename(filename_idx_b, obj.idx_path) != 0)
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    ldb_close(&obj);
 
     ret = LDB_OK;
 
@@ -1492,7 +1504,7 @@ END_FUNCTION:
     return ret;
 }
 
-int ldb_join(const char *path, const char *name1, const char *name2, const char *name)
+int ldb_join(const char *path, const char *name1, const char *name2)
 {
     int ret = LDB_OK;
     ldb_impl_t obj1 = {0};
@@ -1504,22 +1516,27 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
     FILE *fp_dat_out = NULL;
     FILE *fp_idx_out = NULL;
     int dat_fd1 = -1;
+    char buf[128] = {0};
 
     if (!path)
         exit_function(LDB_ERR_ARG);
 
-    if (!ldb_is_valid_name(name1) || !ldb_is_valid_name(name2) || !ldb_is_valid_name(name))
+    if (strcmp(name1, name2) == 0)
         exit_function(LDB_ERR_ARG);
 
-    if (strcmp(name1, name2) == 0 || strcmp(name1, name) == 0 || strcmp(name2, name) == 0)
+    // Preparating output journal
+    snprintf(buf, sizeof(buf), "%s-%s", name2, LDB_SUFFIX_TMP);
+
+    if (!ldb_is_valid_name(buf))
         exit_function(LDB_ERR_ARG);
 
-    if ((filename_dat_out = ldb_create_filename(path, name, LDB_EXT_DAT)) == NULL)
+    if ((filename_dat_out = ldb_create_filename(path, buf, LDB_EXT_DAT)) == NULL)
         exit_function(LDB_ERR_MEM);
 
-    if ((filename_idx_out = ldb_create_filename(path, name, LDB_EXT_IDX)) == NULL)
+    if ((filename_idx_out = ldb_create_filename(path, buf, LDB_EXT_IDX)) == NULL)
         exit_function(LDB_ERR_MEM);
 
+    // Open both journals
     if ((ret = ldb_open(&obj1, path, name1, 0)) != LDB_OK)
         exit_function(ret);
 
@@ -1623,11 +1640,20 @@ int ldb_join(const char *path, const char *name1, const char *name2, const char 
 
     fp_idx_out = NULL;
 
-    // Remove source journals
+    // Remove first part
     remove(obj1.dat_path);
     remove(obj1.idx_path);
-    remove(obj2.dat_path);
-    remove(obj2.idx_path);
+
+    ldb_close(&obj1);
+
+    // Rename second part original name
+    if (rename(filename_dat_out, obj2.dat_path) != 0)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (rename(filename_idx_out, obj2.idx_path) != 0)
+        exit_function(LDB_ERR_WRITE_IDX);
+
+    ldb_close(&obj2);
 
     ret = LDB_OK;
 

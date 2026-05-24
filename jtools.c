@@ -45,7 +45,6 @@ typedef struct params_t {
     mode_e mode;
     fileinfo_t file1;
     fileinfo_t file2;
-    fileinfo_t output;
     bool have_num;
     bool have_seq;
     uint64_t num;
@@ -64,7 +63,7 @@ static void print_help(FILE *out)
         "  " APP_NAME " --repair FILE\n"
         "  " APP_NAME " --rollback (-n NUM | -s SEQ) FILE\n"
         "  " APP_NAME " --split (-n NUM | -s SEQ) FILE\n"
-        "  " APP_NAME " --join -o FILE FILE1 FILE2\n"
+        "  " APP_NAME " --join FILE1 FILE2\n"
         "\n"
         "Options:\n"
         "  -h, --help              Show this help and exit\n"
@@ -75,7 +74,6 @@ static void print_help(FILE *out)
         "      --join              Join two consecutive journals (replaces originals)\n"
         "  -n, --num=NUM           Number of entries to remove/keep\n"
         "  -s, --seq=SEQ           Boundary sequence number\n"
-        "  -o, --output=FILE       Output journal file (for --join)\n"
         "\n"
         "Exit codes:\n"
         "  0  Success\n"
@@ -290,13 +288,7 @@ static int cmd_split(const params_t *params)
     uint64_t seq = 0;
     ldb_journal_t *journal = NULL;
     ldb_range_t range = {0};
-    char name_a[68] = {0};
-    char name_b[68] = {0};
-
     assert(params->have_num != params->have_seq);
-    
-    snprintf(name_a, sizeof(name_a), "%s-a", params->file1.name);
-    snprintf(name_b, sizeof(name_b), "%s-b", params->file1.name);
 
     if ((journal = ldb_alloc()) == NULL)
         exit_function(EXIT_FAILURE, "%s", "out of memory");
@@ -321,11 +313,11 @@ static int cmd_split(const params_t *params)
     if (seq < range.min_seqnum || seq >= range.max_seqnum)
         exit_function(EXIT_FAILURE, "%s", "invalid split point");
 
-    if ((rc = ldb_split(params->file1.path, params->file1.name, seq, name_a, name_b)) != LDB_OK)
+    if ((rc = ldb_split(params->file1.path, params->file1.name, seq)) != LDB_OK)
         exit_function(EXIT_FAILURE, "%s", ldb_strerror(rc));
 
-    printf("Journal '%s' split at seqnum %" PRIu64 " into '%s' and '%s'.\n",
-           params->file1.name, seq, name_a, name_b);
+    printf("Journal '%s' split at seqnum %" PRIu64 " into '%s-%" PRIu64 "' and '%s'.\n",
+           params->file1.name, seq, params->file1.name, seq, params->file1.name);
 
     ret = EXIT_SUCCESS;
 
@@ -349,24 +341,14 @@ static int cmd_join(const params_t *params)
         return EXIT_FAILURE;
     }
 
-    if (strcmp(params->file1.path, params->output.path) != 0) {
-        fprintf(stderr, "%s: FILEs and OUTPUT must be in the same directory\n", APP_NAME);
-        return EXIT_FAILURE;
-    }
-
-    if (params->output.exists) {
-        fprintf(stderr, "%s: output file already exists\n", APP_NAME);
-        return EXIT_FAILURE;
-    }
-
-    rc = ldb_join(params->file1.path, params->file1.name, params->file2.name, params->output.name);
+    rc = ldb_join(params->file1.path, params->file1.name, params->file2.name);
 
     if (rc != LDB_OK) {
         fprintf(stderr, "%s: %s\n", APP_NAME, ldb_strerror(rc));
         return EXIT_FAILURE;
     }
 
-    printf("Journals '%s' and '%s' joined into '%s'.\n", params->file1.name, params->file2.name, params->output.name);
+    printf("Journal '%s' joined into '%s'.\n", params->file1.name, params->file2.name);
 
     return EXIT_SUCCESS;
 }
@@ -384,14 +366,13 @@ static void parse_args(int argc, char **argv, params_t *params)
         {"join",     no_argument,       0, MODE_JOIN},
         {"num",      required_argument, 0, 'n'},
         {"seq",      required_argument, 0, 's'},
-        {"output",   required_argument, 0, 'o'},
         {0, 0, 0, 0}
     };
 
     memset(params, 0x00, sizeof(*params));
     params->mode = MODE_SUMMARY;
 
-    while ((opt = getopt_long(argc, argv, "hn:s:o:", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "hn:s:", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -411,12 +392,6 @@ static void parse_args(int argc, char **argv, params_t *params)
                     exit(EXIT_FAILURE);
                 }
                 params->have_seq = true;
-                break;
-            case 'o':
-                if (!parse_fileinfo(optarg, &params->output)) {
-                    fprintf(stderr, "%s: invalid --output\n", APP_NAME);
-                    exit(EXIT_FAILURE);
-                }
                 break;
             case MODE_CHECK:
             case MODE_REPAIR:
@@ -466,10 +441,6 @@ static void parse_args(int argc, char **argv, params_t *params)
             }
             break;
         case MODE_JOIN:
-            if (params->output.name[0] == '\0') {
-                fprintf(stderr, "%s: --join requires -o/--output FILE\n", APP_NAME);
-                exit(EXIT_FAILURE);
-            }
             if (optind + 1 >= argc) {
                 fprintf(stderr, APP_NAME": FILE1 FILE2 are required for --join\n");
                 fprintf(stderr, "Try '" APP_NAME" -h' for more information.\n");

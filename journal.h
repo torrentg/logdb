@@ -380,63 +380,62 @@ int ldb_check(ldb_journal_t *obj, bool repair);
  * Splits a journal into two journals at the given sequence number.
  *
  * The source journal is opened with an exclusive lock and must already exist.
- * Journal A receives entries [seqnum1 .. seqnum] and journal B receives
- * entries [seqnum+1 .. seqnum2]. Both output journals inherit the header
- * (including metadata) of the source journal. 
+ * The first output journal (named "{name}-{seqnum}") receives entries
+ * [min_seqnum .. seqnum]. The source journal (name) is replaced in-place
+ * with entries [seqnum+1 .. max_seqnum]. Both output journals inherit the
+ * header (including metadata) of the source journal.
  *
  * The caller is responsible for ensuring:
  *   - seqnum is strictly inside the range (min_seqnum <= seqnum < max_seqnum)
- *   - name_a and name_b are valid journal names and do not already exist
- *   - name_a and name_b fit within the maximum name length
+ *   - the derived name "{name}-{seqnum}" does not already exist
+ *   - the derived name "{name}-{seqnum}" fits within the maximum name length
  *
- * If creation of journal B fails after journal A has been created,
- * journal A is removed before returning the error.
+ * On error, any partially created output files are removed and the
+ * source journal is left intact.
  *
  * Side effect: if the source index file is missing, it is rebuilt in the
  * source directory before the split is performed.
  *
  * @param[in] path    Directory where source and output journals are located.
- * @param[in] name    Source journal name.
- * @param[in] seqnum  Last sequence number that goes into journal A.
- * @param[in] name_a  Output journal name for the first half.
- * @param[in] name_b  Output journal name for the second half.
+ * @param[in] name    Source journal name (also the second output journal).
+ * @param[in] seqnum  Last sequence number that goes into the first output.
  *
  * @return LDB_OK on success, or an error code on failure.
  */
-int ldb_split(const char *path, const char *name, uint64_t seqnum, const char *name_a, const char *name_b);
+int ldb_split(const char *path, const char *name, uint64_t seqnum);
 
 /**
- * Joins two consecutive journals into a new journal.
+ * Joins two consecutive journals.
  *
  * Both source journals are opened with an exclusive lock and must already exist.
- * The output journal receives entries [name1.min_seqnum .. name2.max_seqnum] and
- * inherits the header (including metadata) of the first source journal (name1).
- * The index file of the output journal is generated during the operation.
+ * The second source journal (name2) is replaced in-place with the combined entries
+ * [name1.min_seqnum .. name2.max_seqnum] and inherits the header (including metadata)
+ * of the first source journal (name1). The index file of name2 is regenerated.
  *
  * If one of the source journals is empty, the result is a copy of the other.
  * If both are empty, the result is an empty journal inheriting name1's header.
  *
  * The caller is responsible for ensuring:
- *   - name1, name2 and name are valid journal names, all distinct from each other
- *   - name does not already exist
+ *   - name1 and name2 are valid journal names, distinct from each other
  *   - name1 and name2 are in the same directory (path)
  *   - name2.min_seqnum == name1.max_seqnum + 1 (consecutiveness)
+ *   - the derived name "{name2}-tmp" does not already exist
+ *   - the derived name "{name2}-tmp" fits within the maximum name length
  *
- * On success, the source journals (name1 and name2) are removed.
- * On error, any partially created output files are removed and
+ * On success, source journal name1 is removed and name2 is replaced with the result.
+ * On error, any partially created temporary files are removed and
  * the source journals are left intact.
  *
  * Side effect: if a source index file is missing, it is rebuilt before
  * the join is performed.
  *
- * @param[in] path   Directory where source and output journals are located.
- * @param[in] name1  First source journal name.
- * @param[in] name2  Second source journal name.
- * @param[in] name   Output journal name.
+ * @param[in] path   Directory where source journals are located.
+ * @param[in] name1  First source journal name (removed on success).
+ * @param[in] name2  Second source journal name (replaced in-place on success).
  *
  * @return LDB_OK on success, or an error code on failure.
  */
-int ldb_join(const char *path, const char *name1, const char *name2, const char *name);
+int ldb_join(const char *path, const char *name1, const char *name2);
 
 #ifdef __cplusplus
 }
@@ -537,12 +536,12 @@ class journal_t
     ldb_journal_t *m_journal = nullptr;
 };
 
-inline int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum, const std::string &name_a, const std::string &name_b) {
-    return ldb_split(path.c_str(), name.c_str(), seqnum, name_a.c_str(), name_b.c_str());
+inline int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum) {
+    return ldb_split(path.c_str(), name.c_str(), seqnum);
 }
 
-inline int join(const std::filesystem::path &path, const std::string &name1, const std::string &name2, const std::string &name) {
-    return ldb_join(path.c_str(), name1.c_str(), name2.c_str(), name.c_str());
+inline int join(const std::filesystem::path &path, const std::string &name1, const std::string &name2) {
+    return ldb_join(path.c_str(), name1.c_str(), name2.c_str());
 }
 
 } // namespace ldb
