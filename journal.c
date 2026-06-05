@@ -165,8 +165,8 @@ static inline size_t ldb_padding(size_t value) {
 
 static inline bool ldb_is_valid_obj(ldb_impl_t *obj) {
     return (obj &&
-            obj->dat_fp && !feof(obj->dat_fp) && !ferror(obj->dat_fp) &&
-            obj->idx_fp && !feof(obj->idx_fp) && !ferror(obj->idx_fp));
+            obj->dat_fp && !ferror(obj->dat_fp) &&
+            obj->idx_fp && !ferror(obj->idx_fp));
 }
 
 static void ldb_reset_state(ldb_range_t *state) {
@@ -600,27 +600,27 @@ static int ldb_append_entry_dat(ldb_impl_t *obj, ldb_range_t *state, ldb_entry_t
     if (fwrite(&record, sizeof(ldb_record_dat_t), 1, obj->dat_fp) != 1)
         return LDB_ERR_WRITE_DAT;
 
+    obj->dat_end += sizeof(ldb_record_dat_t);
+
     if (record.data_len)
     {
         if (fwrite(entry->data, 1, record.data_len, obj->dat_fp) != record.data_len)
             return LDB_ERR_WRITE_DAT;
 
+        obj->dat_end += record.data_len;
+
         size_t padding = ldb_padding(entry->data_len);
 
         if (fwrite(zeros, 1, padding, obj->dat_fp) != padding)
             return LDB_ERR_WRITE_DAT;
+
+        obj->dat_end += padding;
     }
 
     if (state->min_seqnum == 0)
         state->min_seqnum = entry->seqnum;
 
     state->max_seqnum = entry->seqnum;
-
-    long pos = ftell(obj->dat_fp);
-    if (pos < 0)
-        return LDB_ERR_READ_DAT;
-
-    obj->dat_end = (size_t)pos;
 
     return LDB_OK;
 }
@@ -1518,7 +1518,7 @@ int ldb_join(const char *path, const char *name1, const char *name2)
     int dat_fd1 = -1;
     char buf[128] = {0};
 
-    if (!path)
+    if (!path || !name1 || !name2)
         exit_function(LDB_ERR_ARG);
 
     if (strcmp(name1, name2) == 0)
@@ -1528,7 +1528,7 @@ int ldb_join(const char *path, const char *name1, const char *name2)
     snprintf(buf, sizeof(buf), "%s-%s", name2, LDB_SUFFIX_TMP);
 
     if (!ldb_is_valid_name(buf))
-        exit_function(LDB_ERR_ARG);
+        exit_function(LDB_ERR_NAME);
 
     if ((filename_dat_out = ldb_create_filename(path, buf, LDB_EXT_DAT)) == NULL)
         exit_function(LDB_ERR_MEM);
@@ -1759,13 +1759,6 @@ int ldb_append(ldb_impl_t *obj, ldb_entry_t *entries, size_t len, size_t *num)
     pthread_mutex_lock(&obj->mutex_state);
     state = obj->state;
     pthread_mutex_unlock(&obj->mutex_state);
-
-    if (fseek(obj->dat_fp, (long)obj->dat_end, SEEK_SET) != 0)
-        return LDB_ERR_WRITE_DAT;
-
-    size_t pos = ldb_get_pos_idx(&state, state.max_seqnum + 1);
-    if (fseek(obj->idx_fp, (long)pos, SEEK_SET) != 0)
-        return LDB_ERR_WRITE_IDX;
 
     for (i = 0; i < len; i++)
     {

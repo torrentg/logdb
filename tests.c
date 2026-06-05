@@ -1549,8 +1549,8 @@ void test_join_invalid_args(void)
     TEST_CHECK(ldb_join("",  "j1", NULL) == LDB_ERR_ARG);
 
     // invalid names
-    TEST_CHECK(ldb_join("", "bad name", "j2") == LDB_ERR_ARG);
-    TEST_CHECK(ldb_join("", "j1", "bad name") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_join("", "bad name", "j2") == LDB_ERR_NAME);
+    TEST_CHECK(ldb_join("", "j1", "bad name") == LDB_ERR_NAME);
 
     // duplicate names
     TEST_CHECK(ldb_join("", "j1", "j1") == LDB_ERR_ARG);
