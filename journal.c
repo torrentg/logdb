@@ -1334,6 +1334,55 @@ END_FUNCTION:
 
 #undef goto_zeroize
 
+int ldb_rename(const char *path, const char *name1, const char *name2)
+{
+    int ret = LDB_OK;
+    char *filename_dat_src = NULL;
+    char *filename_dat_dst = NULL;
+    char *filename_idx_src = NULL;
+    char *filename_idx_dst = NULL;
+
+    if (!path || !name1 || !name2)
+        exit_function(LDB_ERR_ARG);
+
+    if (strcmp(name1, name2) == 0)
+        exit_function(LDB_ERR_ARG);
+
+    if (!ldb_is_valid_path(path) || !ldb_is_valid_name(name1) || !ldb_is_valid_name(name2))
+        exit_function(LDB_ERR_ARG);
+
+    if ((filename_dat_src = ldb_create_filename(path, name1, LDB_EXT_DAT)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((filename_dat_dst = ldb_create_filename(path, name2, LDB_EXT_DAT)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((filename_idx_src = ldb_create_filename(path, name1, LDB_EXT_IDX)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if ((filename_idx_dst = ldb_create_filename(path, name2, LDB_EXT_IDX)) == NULL)
+        exit_function(LDB_ERR_MEM);
+
+    if (access(filename_dat_dst, F_OK) == 0 || access(filename_idx_dst, F_OK) == 0)
+        exit_function(LDB_ERR_NAME);
+
+    if (rename(filename_dat_src, filename_dat_dst) != 0)
+        exit_function(LDB_ERR_WRITE_DAT);
+
+    if (rename(filename_idx_src, filename_idx_dst) != 0)
+    {
+        rename(filename_dat_dst, filename_dat_src);
+        exit_function(LDB_ERR_WRITE_IDX);
+    }
+
+END_FUNCTION:
+    free(filename_dat_src);
+    free(filename_dat_dst);
+    free(filename_idx_src);
+    free(filename_idx_dst);
+    return ret;
+}
+
 int ldb_split(const char *path, const char *name, uint64_t seqnum)
 {
     int ret = LDB_OK;
@@ -2029,6 +2078,14 @@ ldb_journal_t * ldb_alloc(void) {
 
 void ldb_free(ldb_journal_t *obj) {
     free(obj);
+}
+
+size_t ldb_get_size(ldb_journal_t *obj)
+{
+    if (!obj)
+        return 0;
+
+    return ((ldb_impl_t *)obj)->dat_end;
 }
 
 int ldb_set_meta(ldb_journal_t *obj, const char *meta, size_t len)

@@ -257,6 +257,15 @@ int ldb_get_meta(ldb_journal_t *obj, char *meta, size_t len);
 ldb_range_t ldb_get_range(ldb_journal_t *obj);
 
 /**
+ * Returns the current data file size of a journal.
+ *
+ * @param[in] obj Journal to inspect.
+ *
+ * @return Data file size in bytes.
+ */
+size_t ldb_get_size(ldb_journal_t *obj);
+
+/**
  * Appends entries to the journal.
  * 
  * Entries are identified by their seqnum. 
@@ -375,6 +384,17 @@ long ldb_rollback(ldb_journal_t *obj, uint64_t seqnum);
  *         otherwise an error code.
  */
 int ldb_check(ldb_journal_t *obj, bool repair);
+
+/**
+ * Renames a journal, including both dat and idx files.
+ *
+ * @param[in] path Directory where the journal files are located.
+ * @param[in] name1 Source journal name.
+ * @param[in] name2 Destination journal name.
+ *
+ * @return LDB_OK on success, otherwise an error code.
+ */
+int ldb_rename(const char *path, const char *name1, const char *name2);
 
 /**
  * Splits a journal into two journals at the given sequence number.
@@ -502,6 +522,10 @@ class journal_t
         swap(first.m_journal, second.m_journal);
     }
 
+    size_t get_size() const {
+        return ldb_get_size(m_journal);
+    }
+
     int set_meta(const char *meta, size_t len) {
         return ldb_set_meta(m_journal, meta, len);
     }
@@ -538,6 +562,10 @@ class journal_t
 
 inline int split(const std::filesystem::path &path, const std::string &name, uint64_t seqnum) {
     return ldb_split(path.c_str(), name.c_str(), seqnum);
+}
+
+inline int rename(const std::filesystem::path &path, const std::string &name1, const std::string &name2) {
+    return ldb_rename(path.c_str(), name1.c_str(), name2.c_str());
 }
 
 inline int join(const std::filesystem::path &path, const std::string &name1, const std::string &name2) {

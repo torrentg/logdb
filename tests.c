@@ -1712,6 +1712,79 @@ void test_join_second_empty(void)
     remove_journal("test2");
 }
 
+void test_get_size_all(void)
+{
+    ldb_journal_t journal = {0};
+    ldb_entry_t entry1 = { .seqnum = 1, .data_len = 0, .data = NULL };
+    ldb_entry_t entry2 = { .seqnum = 2, .data_len = 5, .data = "data" };
+
+    remove_journal("test");
+
+    TEST_CHECK(ldb_get_size(NULL) == 0);
+    TEST_CHECK(ldb_get_size(&journal) == 0);
+
+    TEST_ASSERT(ldb_open(&journal, "", "test", LDB_OPEN_CREATE) == LDB_OK);
+    TEST_CHECK(ldb_get_size(&journal) == sizeof(ldb_header_dat_t));
+
+    TEST_ASSERT(ldb_append(&journal, &entry1, 1, NULL) == LDB_OK);
+    TEST_CHECK(ldb_get_size(&journal) == sizeof(ldb_header_dat_t) + sizeof(ldb_record_dat_t));
+
+    TEST_ASSERT(ldb_append(&journal, &entry2, 1, NULL) == LDB_OK);
+    TEST_CHECK(ldb_get_size(&journal) == sizeof(ldb_header_dat_t)
+                                      + 2 * sizeof(ldb_record_dat_t)
+                                      + entry2.data_len
+                                      + ldb_padding(entry2.data_len));
+
+    ldb_close(&journal);
+    TEST_CHECK(ldb_get_size(&journal) == 0);
+
+    remove_journal("test");
+}
+
+void test_rename_all(void)
+{
+    ldb_journal_t journal = {0};
+    ldb_entry_t read_entries[2] = { {0} };
+    char buf[128] = {0};
+    size_t num = 0;
+
+    remove_journal("test1");
+    remove_journal("test2");
+    remove_journal("test3");
+
+    TEST_CHECK(ldb_rename(NULL, "test1", "test2") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_rename("", "test1", "test1") == LDB_ERR_ARG);
+    TEST_CHECK(ldb_rename("", "test1", "test3?") == LDB_ERR_ARG);
+
+    TEST_ASSERT(ldb_open(&journal, "", "test1", LDB_OPEN_CREATE) == LDB_OK);
+    append_entries(&journal, 10, 11);
+    ldb_close(&journal);
+
+    TEST_ASSERT(ldb_open(&journal, "", "test3", LDB_OPEN_CREATE) == LDB_OK);
+    ldb_close(&journal);
+
+    TEST_CHECK(ldb_rename("", "test1", "test3") == LDB_ERR_NAME);
+    remove_journal("test3");
+
+    TEST_CHECK(ldb_rename("", "test1", "test2") == LDB_OK);
+    TEST_CHECK(access("test1.dat", F_OK) != 0);
+    TEST_CHECK(access("test1.idx", F_OK) != 0);
+    TEST_CHECK(access("test2.dat", F_OK) == 0);
+    TEST_CHECK(access("test2.idx", F_OK) == 0);
+
+    TEST_ASSERT(ldb_open(&journal, "", "test2", 0) == LDB_OK);
+    TEST_CHECK(journal.state.min_seqnum == 10);
+    TEST_CHECK(journal.state.max_seqnum == 11);
+
+    TEST_CHECK(ldb_read(&journal, 10, read_entries, 2, buf, sizeof(buf), &num) == LDB_OK);
+    TEST_CHECK(num == 2);
+    TEST_CHECK(check_entry(&read_entries[0], 10, "data-10"));
+    TEST_CHECK(check_entry(&read_entries[1], 11, "data-11"));
+
+    ldb_close(&journal);
+    remove_journal("test2");
+}
+
 TEST_LIST = {
     { "sizeof()",                      test_sizeof },
     { "crc32()",                       test_crc32 },
@@ -1745,6 +1818,7 @@ TEST_LIST = {
     { "read() empty journal",          test_read_empty },
     { "read() nominal case",           test_read_nominal_case },
     { "range() all",                   test_range_all },
+    { "get_size() all",                test_get_size_all },
     { "rollback() invalid args",       test_rollback_invalid_args },
     { "rollback() nominal case",       test_rollback_nominal_case },
     { "alloc() all",                   test_alloc_all },
@@ -1774,5 +1848,6 @@ TEST_LIST = {
     { "join() non consecutive",        test_join_non_consecutive },
     { "join() first empty",            test_join_first_empty },
     { "join() second empty",           test_join_second_empty },
+    { "rename() all",                  test_rename_all },
     { NULL, NULL }
 };
